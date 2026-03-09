@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -90,30 +92,14 @@ func TestUploadSuccess(t *testing.T) {
 
 	router := newTestRouter(fileStore, objectStore, health, Options{
 		MaxFileSize: 1024,
+		URLExpiry:   time.Hour,
 		NewID: func() uuid.UUID {
 			return fixedID
 		},
 	})
 
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	partHeader := textproto.MIMEHeader{}
-	partHeader.Set("Content-Disposition", `form-data; name="file"; filename="hello.txt"`)
-	partHeader.Set("Content-Type", "text/plain")
-	part, err := writer.CreatePart(partHeader)
-	if err != nil {
-		t.Fatalf("create part: %v", err)
-	}
 	content := []byte("hello world")
-	if _, err := part.Write(content); err != nil {
-		t.Fatalf("write part: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/files", body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req := newUploadRequest(t, "hello.txt", "text/plain", content)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -156,6 +142,27 @@ func TestUploadSuccess(t *testing.T) {
 	}
 }
 
+func TestUploadMissingFile(t *testing.T) {
+	fileStore := &fakeFileStore{}
+	objectStore := &fakeObjectStore{}
+	health := &fakeHealth{}
+	router := newTestRouter(fileStore, objectStore, health, Options{})
+
+	req := newEmptyUploadRequest(t)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+	if objectStore.putCalls != 0 {
+		t.Fatalf("expected object store not called")
+	}
+	if fileStore.createCalls != 0 {
+		t.Fatalf("expected file store not called")
+	}
+}
+
 func TestUploadRejectsContentType(t *testing.T) {
 	fileStore := &fakeFileStore{}
 	objectStore := &fakeObjectStore{}
@@ -195,6 +202,39 @@ func TestUploadRejectsContentType(t *testing.T) {
 	}
 }
 
+func TestUploadS3Failure(t *testing.T) {
+	fileStore := &fakeFileStore{}
+	objectStore := &fakeObjectStore{putErr: errors.New("s3 failure")}
+	health := &fakeHealth{}
+	router := newTestRouter(fileStore, objectStore, health, Options{})
+
+	req := newUploadRequest(t, "hello.txt", "text/plain", []byte("hello"))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	if fileStore.createCalls != 0 {
+		t.Fatalf("expected file store not called")
+	}
+}
+
+func TestUploadDBFailure(t *testing.T) {
+	fileStore := &fakeFileStore{createErr: errors.New("db failure")}
+	objectStore := &fakeObjectStore{}
+	health := &fakeHealth{}
+	router := newTestRouter(fileStore, objectStore, health, Options{})
+
+	req := newUploadRequest(t, "hello.txt", "text/plain", []byte("hello"))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+}
+
 func TestGetMetadataNotFound(t *testing.T) {
 	fileStore := &fakeFileStore{getErr: filestore.ErrFileNotFound}
 	objectStore := &fakeObjectStore{}
@@ -208,6 +248,21 @@ func TestGetMetadataNotFound(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestGetMetadataInvalidUUID(t *testing.T) {
+	fileStore := &fakeFileStore{}
+	objectStore := &fakeObjectStore{}
+	health := &fakeHealth{}
+	router := newTestRouter(fileStore, objectStore, health, Options{})
+
+	req := httptest.NewRequest(http.MethodGet, "/files/not-a-uuid", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
 }
 
@@ -235,8 +290,12 @@ func TestGetMetadataSuccess(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
+	body := rec.Body.Bytes()
+	if !bytes.Contains(body, []byte(`"created_at"`)) {
+		t.Fatalf("expected created_at in response body")
+	}
 	var resp metadataResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if resp.ID != id.String() {
@@ -287,9 +346,121 @@ func TestGetURLSuccess(t *testing.T) {
 	}
 }
 
+func TestGetURLNotFound(t *testing.T) {
+	fileStore := &fakeFileStore{getErr: filestore.ErrFileNotFound}
+	objectStore := &fakeObjectStore{}
+	health := &fakeHealth{}
+	router := newTestRouter(fileStore, objectStore, health, Options{})
+
+	id := uuid.MustParse("9c8f9bf5-4d1f-4e2c-b54b-8064d21f0f52")
+	req := httptest.NewRequest(http.MethodGet, "/files/"+id.String()+"/url", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestGetURLPresignFailure(t *testing.T) {
+	fileID := uuid.MustParse("0e4e3e25-28e0-4a34-bf40-3536a3c68080")
+	fileStore := &fakeFileStore{getRecord: model.FileRecord{ID: fileID}}
+	objectStore := &fakeObjectStore{presignErr: errors.New("presign failure")}
+	health := &fakeHealth{}
+	router := newTestRouter(fileStore, objectStore, health, Options{})
+
+	req := httptest.NewRequest(http.MethodGet, "/files/"+fileID.String()+"/url", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		fileStore := &fakeFileStore{}
+		objectStore := &fakeObjectStore{}
+		health := &fakeHealth{}
+		router := newTestRouter(fileStore, objectStore, health, Options{})
+
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+		if health.calls != 1 {
+			t.Fatalf("expected health check to be called")
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		fileStore := &fakeFileStore{}
+		objectStore := &fakeObjectStore{}
+		health := &fakeHealth{err: errors.New("db down")}
+		router := newTestRouter(fileStore, objectStore, health, Options{})
+
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+		}
+		if health.calls != 1 {
+			t.Fatalf("expected health check to be called")
+		}
+	})
+}
+
 func newTestRouter(fileStore *fakeFileStore, objectStore *fakeObjectStore, health *fakeHealth, opts Options) http.Handler {
+	if opts.MaxFileSize == 0 {
+		opts.MaxFileSize = 1024
+	}
+	if opts.URLExpiry == 0 {
+		opts.URLExpiry = time.Hour
+	}
 	h := New(fileStore, objectStore, health, opts)
 	router := chi.NewRouter()
 	h.RegisterRoutes(router)
 	return router
+}
+
+func newUploadRequest(t *testing.T, filename, contentType string, content []byte) *http.Request {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	partHeader := textproto.MIMEHeader{}
+	partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+	partHeader.Set("Content-Type", contentType)
+	part, err := writer.CreatePart(partHeader)
+	if err != nil {
+		t.Fatalf("create part: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/files", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
+}
+
+func newEmptyUploadRequest(t *testing.T) *http.Request {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/files", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
 }

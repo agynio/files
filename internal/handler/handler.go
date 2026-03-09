@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"strings"
@@ -15,11 +16,6 @@ import (
 	"github.com/agynio/files/internal/model"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-)
-
-const (
-	defaultMaxFileSize = int64(20 * 1024 * 1024)
-	defaultURLExpiry   = time.Hour
 )
 
 var allowedContentPrefixes = []string{
@@ -69,13 +65,11 @@ type Handler struct {
 }
 
 func New(store FileStore, objectStore ObjectStore, health HealthChecker, opts Options) *Handler {
-	maxSize := opts.MaxFileSize
-	if maxSize <= 0 {
-		maxSize = defaultMaxFileSize
+	if opts.MaxFileSize <= 0 {
+		panic("handler: MaxFileSize must be positive")
 	}
-	urlExpiry := opts.URLExpiry
-	if urlExpiry <= 0 {
-		urlExpiry = defaultURLExpiry
+	if opts.URLExpiry <= 0 {
+		panic("handler: URLExpiry must be positive")
 	}
 	now := opts.Now
 	if now == nil {
@@ -89,8 +83,8 @@ func New(store FileStore, objectStore ObjectStore, health HealthChecker, opts Op
 		store:       store,
 		objectStore: objectStore,
 		health:      health,
-		maxFileSize: maxSize,
-		urlExpiry:   urlExpiry,
+		maxFileSize: opts.MaxFileSize,
+		urlExpiry:   opts.URLExpiry,
 		now:         now,
 		newID:       newID,
 	}
@@ -298,7 +292,9 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	if payload == nil {
 		return
 	}
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("writeJSON: encode error: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

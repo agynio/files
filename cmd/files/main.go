@@ -81,7 +81,9 @@ func run() error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
 	}()
 
 	log.Printf("Files service listening on %s", cfg.HTTPAddress)
