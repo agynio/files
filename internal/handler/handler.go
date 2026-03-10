@@ -133,7 +133,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !isAllowedContentType(contentType) {
+	if !IsAllowedContentType(contentType) {
 		writeError(w, http.StatusUnsupportedMediaType, "content type is not allowed")
 		return
 	}
@@ -283,7 +283,7 @@ func parseContentType(raw string) (string, error) {
 	return strings.ToLower(mediaType), nil
 }
 
-func isAllowedContentType(contentType string) bool {
+func IsAllowedContentType(contentType string) bool {
 	for _, prefix := range allowedContentPrefixes {
 		if strings.HasPrefix(contentType, prefix) {
 			return true

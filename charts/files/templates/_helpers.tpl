@@ -6,6 +6,11 @@
 {{- $env = append $env (dict "name" "HTTP_ADDRESS" "value" $httpAddress) -}}
 {{- end }}
 
+{{- $grpcAddress := trimAll " \n\t" (default ":9090" .Values.files.grpcAddress) -}}
+{{- if $grpcAddress }}
+{{- $env = append $env (dict "name" "GRPC_ADDRESS" "value" $grpcAddress) -}}
+{{- end }}
+
 {{- $dbSecret := trim (default "" .Values.files.databaseUrl.existingSecret) -}}
 {{- $dbVar := dict "name" "DATABASE_URL" -}}
 {{- if $dbSecret }}
