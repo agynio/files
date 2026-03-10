@@ -61,10 +61,17 @@ service:
       port: 8080
       targetPort: http
       protocol: TCP
+    - name: grpc
+      port: 9090
+      targetPort: grpc
+      protocol: TCP
 
 containerPorts:
   - name: http
     containerPort: 8080
+    protocol: TCP
+  - name: grpc
+    containerPort: 9090
     protocol: TCP
 
 command: []
@@ -158,6 +165,7 @@ metrics:
 
 files:
   httpAddress: ":8080"
+  grpcAddress: ":9090"
   maxFileSize: 20971520
   databaseUrl:
     value: ""

@@ -24,6 +24,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          version: 1.66.0
+
+      - name: Generate protobuf stubs
+        run: buf generate buf.build/agynio/api --path agynio/api/files/v1
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:

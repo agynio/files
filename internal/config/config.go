@@ -5,16 +5,19 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/agynio/files/internal/filetype"
 )
 
 const (
 	defaultHTTPAddress = ":8080"
+	defaultGRPCAddress = ":9090"
 	defaultS3Region    = "us-east-1"
-	defaultMaxFileSize = int64(20 * 1024 * 1024)
 )
 
 type Config struct {
 	HTTPAddress string
+	GRPCAddress string
 	DatabaseURL string
 	S3Endpoint  string
 	S3Bucket    string
@@ -31,6 +34,11 @@ func FromEnv() (Config, error) {
 	cfg.HTTPAddress = strings.TrimSpace(os.Getenv("HTTP_ADDRESS"))
 	if cfg.HTTPAddress == "" {
 		cfg.HTTPAddress = defaultHTTPAddress
+	}
+
+	cfg.GRPCAddress = strings.TrimSpace(os.Getenv("GRPC_ADDRESS"))
+	if cfg.GRPCAddress == "" {
+		cfg.GRPCAddress = defaultGRPCAddress
 	}
 
 	var err error
@@ -78,7 +86,7 @@ func FromEnv() (Config, error) {
 
 	maxSize := strings.TrimSpace(os.Getenv("MAX_FILE_SIZE"))
 	if maxSize == "" {
-		cfg.MaxFileSize = defaultMaxFileSize
+		cfg.MaxFileSize = filetype.DefaultMaxFileSize
 	} else {
 		parsed, err := strconv.ParseInt(maxSize, 10, 64)
 		if err != nil {
