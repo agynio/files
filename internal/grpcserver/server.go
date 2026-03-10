@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"strings"
+	"time"
 
 	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
-	"github.com/agynio/files/internal/handler"
+	"github.com/agynio/files/internal/filetype"
 	"github.com/agynio/files/internal/model"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -18,13 +18,11 @@ import (
 )
 
 const (
-	defaultMaxFileSize = int64(20 * 1024 * 1024)
-	maxChunkSize       = 256 * 1024
+	maxChunkSize = 256 * 1024
 )
 
 type FileStore interface {
 	CreateFile(ctx context.Context, record model.FileRecord) error
-	GetFile(ctx context.Context, id uuid.UUID) (model.FileRecord, error)
 }
 
 type ObjectStore interface {
@@ -33,6 +31,7 @@ type ObjectStore interface {
 
 type Options struct {
 	MaxFileSize int64
+	Now         func() time.Time
 	NewID       func() uuid.UUID
 }
 
@@ -41,13 +40,18 @@ type Server struct {
 	store       FileStore
 	objectStore ObjectStore
 	maxFileSize int64
+	now         func() time.Time
 	newID       func() uuid.UUID
 }
 
 func New(store FileStore, objectStore ObjectStore, opts Options) *Server {
 	maxSize := opts.MaxFileSize
 	if maxSize <= 0 {
-		maxSize = defaultMaxFileSize
+		maxSize = filetype.DefaultMaxFileSize
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
 	}
 	newID := opts.NewID
 	if newID == nil {
@@ -57,6 +61,7 @@ func New(store FileStore, objectStore ObjectStore, opts Options) *Server {
 		store:       store,
 		objectStore: objectStore,
 		maxFileSize: maxSize,
+		now:         now,
 		newID:       newID,
 	}
 }
@@ -81,11 +86,11 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 		return status.Error(codes.InvalidArgument, "filename is required")
 	}
 
-	contentType, err := parseContentType(metadata.GetContentType())
+	contentType, err := filetype.ParseContentType(metadata.GetContentType())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "content_type: %v", err)
 	}
-	if !handler.IsAllowedContentType(contentType) {
+	if !filetype.IsAllowedContentType(contentType) {
 		return status.Error(codes.InvalidArgument, "content_type is not allowed")
 	}
 
@@ -111,6 +116,11 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 		<-done
 		return putErr
 	}
+	abortUpload := func(cause error, statusErr error) error {
+		_ = writer.CloseWithError(cause)
+		_ = waitUpload()
+		return statusErr
+	}
 
 	received := int64(0)
 	for {
@@ -119,82 +129,52 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 			break
 		}
 		if err != nil {
-			writer.CloseWithError(err)
-			_ = waitUpload()
-			return status.Errorf(codes.Internal, "receive chunk: %v", err)
+			return abortUpload(err, status.Errorf(codes.Internal, "receive chunk: %v", err))
 		}
 		if msg.GetMetadata() != nil {
-			writer.CloseWithError(errors.New("metadata sent after initial message"))
-			_ = waitUpload()
-			return status.Error(codes.InvalidArgument, "metadata must be the first message")
+			return abortUpload(errors.New("metadata sent after initial message"), status.Error(codes.InvalidArgument, "metadata must be the first message"))
 		}
 		chunk := msg.GetChunk()
 		if chunk == nil {
-			writer.CloseWithError(errors.New("chunk missing"))
-			_ = waitUpload()
-			return status.Error(codes.InvalidArgument, "chunk is required")
+			return abortUpload(errors.New("chunk missing"), status.Error(codes.InvalidArgument, "chunk is required"))
 		}
 		data := chunk.GetData()
 		if len(data) > maxChunkSize {
-			writer.CloseWithError(errors.New("chunk exceeds max size"))
-			_ = waitUpload()
-			return status.Error(codes.InvalidArgument, "chunk exceeds max size")
+			return abortUpload(errors.New("chunk exceeds max size"), status.Error(codes.InvalidArgument, "chunk exceeds max size"))
 		}
 		nextSize := received + int64(len(data))
 		if nextSize > sizeBytes {
-			writer.CloseWithError(errors.New("file exceeds declared size"))
-			_ = waitUpload()
-			return status.Error(codes.InvalidArgument, "file exceeds declared size")
+			return abortUpload(errors.New("file exceeds declared size"), status.Error(codes.InvalidArgument, "file exceeds declared size"))
 		}
 		if len(data) > 0 {
 			if _, err := writer.Write(data); err != nil {
-				writer.CloseWithError(err)
-				_ = waitUpload()
-				return status.Errorf(codes.Internal, "stream to storage: %v", err)
+				return abortUpload(err, status.Errorf(codes.Internal, "stream to storage: %v", err))
 			}
 		}
 		received = nextSize
 	}
 
 	if received != sizeBytes {
-		writer.CloseWithError(fmt.Errorf("expected %d bytes", sizeBytes))
-		_ = waitUpload()
-		return status.Error(codes.InvalidArgument, "file size does not match metadata")
+		return abortUpload(fmt.Errorf("expected %d bytes", sizeBytes), status.Error(codes.InvalidArgument, "file size does not match metadata"))
 	}
 	_ = writer.Close()
 	if err := waitUpload(); err != nil {
 		return status.Errorf(codes.Internal, "store file: %v", err)
 	}
 
+	createdAt := s.now().UTC()
 	record := model.FileRecord{
 		ID:          id,
 		Filename:    filename,
 		ContentType: contentType,
 		SizeBytes:   sizeBytes,
+		CreatedAt:   createdAt,
 	}
 	if err := s.store.CreateFile(ctx, record); err != nil {
 		return status.Errorf(codes.Internal, "persist metadata: %v", err)
 	}
-
-	stored, err := s.store.GetFile(ctx, id)
-	if err != nil {
-		return status.Errorf(codes.Internal, "fetch metadata: %v", err)
-	}
-
-	resp := &filesv1.UploadFileResponse{File: toProtoFileInfo(stored)}
+	resp := &filesv1.UploadFileResponse{File: toProtoFileInfo(record)}
 	return stream.SendAndClose(resp)
-}
-
-func parseContentType(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", errors.New("content type is required")
-	}
-	mediaType, _, err := mime.ParseMediaType(raw)
-	if err != nil {
-		return "", errors.New("content type is invalid")
-	}
-	return strings.ToLower(mediaType), nil
 }
 
 func toProtoFileInfo(record model.FileRecord) *filesv1.FileInfo {

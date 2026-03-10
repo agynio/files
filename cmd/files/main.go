@@ -94,8 +94,22 @@ func run() error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		grpcServer.GracefulStop()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("http shutdown: %v", err)
+		}
+
+		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer grpcCancel()
+		grpcDone := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(grpcDone)
+		}()
+		select {
+		case <-grpcDone:
+		case <-grpcCtx.Done():
+			grpcServer.Stop()
+		}
 	}()
 
 	go func() {

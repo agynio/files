@@ -6,36 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/agynio/files/internal/filestore"
+	"github.com/agynio/files/internal/filetype"
 	"github.com/agynio/files/internal/model"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
 const (
-	defaultMaxFileSize = int64(20 * 1024 * 1024)
-	defaultURLExpiry   = time.Hour
+	defaultURLExpiry = time.Hour
 )
-
-var allowedContentPrefixes = []string{
-	"image/",
-	"text/",
-	"application/pdf",
-	"application/msword",
-	"application/vnd.openxmlformats-officedocument",
-	"application/vnd.ms-excel",
-	"application/vnd.ms-powerpoint",
-	"application/json",
-	"application/xml",
-	"application/zip",
-	"application/gzip",
-	"application/x-tar",
-}
 
 type FileStore interface {
 	CreateFile(ctx context.Context, record model.FileRecord) error
@@ -71,7 +54,7 @@ type Handler struct {
 func New(store FileStore, objectStore ObjectStore, health HealthChecker, opts Options) *Handler {
 	maxSize := opts.MaxFileSize
 	if maxSize <= 0 {
-		maxSize = defaultMaxFileSize
+		maxSize = filetype.DefaultMaxFileSize
 	}
 	urlExpiry := opts.URLExpiry
 	if urlExpiry <= 0 {
@@ -128,12 +111,12 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentType, err := parseContentType(header.Header.Get("Content-Type"))
+	contentType, err := filetype.ParseContentType(header.Header.Get("Content-Type"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !IsAllowedContentType(contentType) {
+	if !filetype.IsAllowedContentType(contentType) {
 		writeError(w, http.StatusUnsupportedMediaType, "content type is not allowed")
 		return
 	}
@@ -269,27 +252,6 @@ func parseUUIDParam(r *http.Request, name string) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("%s must be a valid UUID", name)
 	}
 	return id, nil
-}
-
-func parseContentType(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("content type is required")
-	}
-	mediaType, _, err := mime.ParseMediaType(raw)
-	if err != nil {
-		return "", fmt.Errorf("content type is invalid")
-	}
-	return strings.ToLower(mediaType), nil
-}
-
-func IsAllowedContentType(contentType string) bool {
-	for _, prefix := range allowedContentPrefixes {
-		if strings.HasPrefix(contentType, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -5,13 +5,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/agynio/files/internal/filetype"
 )
 
 const (
 	defaultHTTPAddress = ":8080"
 	defaultGRPCAddress = ":9090"
 	defaultS3Region    = "us-east-1"
-	defaultMaxFileSize = int64(20 * 1024 * 1024)
 )
 
 type Config struct {
@@ -85,7 +86,7 @@ func FromEnv() (Config, error) {
 
 	maxSize := strings.TrimSpace(os.Getenv("MAX_FILE_SIZE"))
 	if maxSize == "" {
-		cfg.MaxFileSize = defaultMaxFileSize
+		cfg.MaxFileSize = filetype.DefaultMaxFileSize
 	} else {
 		parsed, err := strconv.ParseInt(maxSize, 10, 64)
 		if err != nil {
