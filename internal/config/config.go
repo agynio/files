@@ -11,7 +11,7 @@ import (
 
 const (
 	defaultHTTPAddress = ":8080"
-	defaultGRPCAddress = ":9090"
+	defaultGRPCAddress = ":50051"
 	defaultS3Region    = "us-east-1"
 )
 
