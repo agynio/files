@@ -5,18 +5,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/agynio/files/internal/filetype"
 )
 
 const (
-	defaultHTTPAddress = ":8080"
 	defaultGRPCAddress = ":50051"
 	defaultS3Region    = "us-east-1"
+	defaultURLExpiry   = time.Hour
 )
 
 type Config struct {
-	HTTPAddress string
 	GRPCAddress string
 	DatabaseURL string
 	S3Endpoint  string
@@ -26,15 +26,11 @@ type Config struct {
 	S3SecretKey string
 	S3UseSSL    bool
 	MaxFileSize int64
+	URLExpiry   time.Duration
 }
 
 func FromEnv() (Config, error) {
 	cfg := Config{}
-
-	cfg.HTTPAddress = strings.TrimSpace(os.Getenv("HTTP_ADDRESS"))
-	if cfg.HTTPAddress == "" {
-		cfg.HTTPAddress = defaultHTTPAddress
-	}
 
 	cfg.GRPCAddress = strings.TrimSpace(os.Getenv("GRPC_ADDRESS"))
 	if cfg.GRPCAddress == "" {
@@ -96,6 +92,20 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("MAX_FILE_SIZE must be positive")
 		}
 		cfg.MaxFileSize = parsed
+	}
+
+	expiry := strings.TrimSpace(os.Getenv("URL_EXPIRY"))
+	if expiry == "" {
+		cfg.URLExpiry = defaultURLExpiry
+	} else {
+		parsed, err := time.ParseDuration(expiry)
+		if err != nil {
+			return Config{}, fmt.Errorf("URL_EXPIRY must be a valid duration")
+		}
+		if parsed <= 0 {
+			return Config{}, fmt.Errorf("URL_EXPIRY must be positive")
+		}
+		cfg.URLExpiry = parsed
 	}
 
 	return cfg, nil

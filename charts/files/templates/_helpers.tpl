@@ -1,11 +1,6 @@
 {{- define "files.configureEnv" -}}
 {{- $env := list -}}
 
-{{- $httpAddress := trimAll " \n\t" (default ":8080" .Values.files.httpAddress) -}}
-{{- if $httpAddress }}
-{{- $env = append $env (dict "name" "HTTP_ADDRESS" "value" $httpAddress) -}}
-{{- end }}
-
 {{- $grpcAddress := trimAll " \n\t" (default ":9090" .Values.files.grpcAddress) -}}
 {{- if $grpcAddress }}
 {{- $env = append $env (dict "name" "GRPC_ADDRESS" "value" $grpcAddress) -}}
@@ -58,6 +53,11 @@
 
 {{- $maxSize := int (default 20971520 .Values.files.maxFileSize) -}}
 {{- $env = append $env (dict "name" "MAX_FILE_SIZE" "value" (printf "%d" $maxSize)) -}}
+
+{{- $urlExpiry := trimAll " \n\t" (default "1h" .Values.files.urlExpiry) -}}
+{{- if $urlExpiry }}
+{{- $env = append $env (dict "name" "URL_EXPIRY" "value" $urlExpiry) -}}
+{{- end }}
 
 {{- $userEnv := .Values.env | default (list) -}}
 {{- $_ := set .Values "env" (concat $env $userEnv) -}}
