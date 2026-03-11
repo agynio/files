@@ -9,6 +9,7 @@ import (
 	"time"
 
 	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
+	"github.com/agynio/files/internal/filestore"
 	"github.com/agynio/files/internal/filetype"
 	"github.com/agynio/files/internal/model"
 	"github.com/google/uuid"
@@ -19,20 +20,24 @@ import (
 
 const (
 	maxChunkSize = 256 * 1024
+	maxURLExpiry = 24 * time.Hour
 )
 
 type FileStore interface {
 	CreateFile(ctx context.Context, record model.FileRecord) error
+	GetFile(ctx context.Context, id uuid.UUID) (model.FileRecord, error)
 }
 
 type ObjectStore interface {
 	PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
+	PresignGetURL(ctx context.Context, key string, expiry time.Duration) (string, error)
 }
 
 type Options struct {
 	MaxFileSize int64
 	Now         func() time.Time
 	NewID       func() uuid.UUID
+	URLExpiry   time.Duration
 }
 
 type Server struct {
@@ -40,6 +45,7 @@ type Server struct {
 	store       FileStore
 	objectStore ObjectStore
 	maxFileSize int64
+	urlExpiry   time.Duration
 	now         func() time.Time
 	newID       func() uuid.UUID
 }
@@ -57,10 +63,15 @@ func New(store FileStore, objectStore ObjectStore, opts Options) *Server {
 	if newID == nil {
 		newID = uuid.New
 	}
+	urlExpiry := opts.URLExpiry
+	if urlExpiry <= 0 {
+		urlExpiry = time.Hour
+	}
 	return &Server{
 		store:       store,
 		objectStore: objectStore,
 		maxFileSize: maxSize,
+		urlExpiry:   urlExpiry,
 		now:         now,
 		newID:       newID,
 	}
@@ -175,6 +186,68 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 	}
 	resp := &filesv1.UploadFileResponse{File: toProtoFileInfo(record)}
 	return stream.SendAndClose(resp)
+}
+
+func (s *Server) GetFileMetadata(ctx context.Context, req *filesv1.GetFileMetadataRequest) (*filesv1.GetFileMetadataResponse, error) {
+	fileID := strings.TrimSpace(req.GetFileId())
+	if fileID == "" {
+		return nil, status.Error(codes.InvalidArgument, "file_id is required")
+	}
+	id, err := uuid.Parse(fileID)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "file_id must be a valid UUID")
+	}
+
+	record, err := s.store.GetFile(ctx, id)
+	if err != nil {
+		if errors.Is(err, filestore.ErrFileNotFound) {
+			return nil, status.Error(codes.NotFound, "file not found")
+		}
+		return nil, status.Errorf(codes.Internal, "get file: %v", err)
+	}
+
+	return &filesv1.GetFileMetadataResponse{File: toProtoFileInfo(record)}, nil
+}
+
+func (s *Server) GetDownloadUrl(ctx context.Context, req *filesv1.GetDownloadUrlRequest) (*filesv1.GetDownloadUrlResponse, error) {
+	fileID := strings.TrimSpace(req.GetFileId())
+	if fileID == "" {
+		return nil, status.Error(codes.InvalidArgument, "file_id is required")
+	}
+	id, err := uuid.Parse(fileID)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "file_id must be a valid UUID")
+	}
+
+	expiry := s.urlExpiry
+	if req.GetExpiry() != nil {
+		expiry = req.GetExpiry().AsDuration()
+		if expiry <= 0 {
+			return nil, status.Error(codes.InvalidArgument, "expiry must be positive")
+		}
+		if expiry > maxURLExpiry {
+			return nil, status.Error(codes.InvalidArgument, "expiry exceeds maximum")
+		}
+	}
+
+	record, err := s.store.GetFile(ctx, id)
+	if err != nil {
+		if errors.Is(err, filestore.ErrFileNotFound) {
+			return nil, status.Error(codes.NotFound, "file not found")
+		}
+		return nil, status.Errorf(codes.Internal, "get file: %v", err)
+	}
+
+	url, err := s.objectStore.PresignGetURL(ctx, record.ID.String(), expiry)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "presign download url: %v", err)
+	}
+
+	expiresAt := s.now().Add(expiry).UTC()
+	return &filesv1.GetDownloadUrlResponse{
+		Url:       url,
+		ExpiresAt: timestamppb.New(expiresAt),
+	}, nil
 }
 
 func toProtoFileInfo(record model.FileRecord) *filesv1.FileInfo {

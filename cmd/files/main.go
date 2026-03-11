@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,14 +16,13 @@ import (
 	"github.com/agynio/files/internal/db"
 	"github.com/agynio/files/internal/filestore"
 	"github.com/agynio/files/internal/grpcserver"
-	"github.com/agynio/files/internal/handler"
 	"github.com/agynio/files/internal/objectstore"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func main() {
@@ -67,37 +65,24 @@ func run() error {
 
 	fileStore := filestore.New(pool)
 	objectStore := objectstore.New(minioClient, cfg.S3Bucket)
-	h := handler.New(fileStore, objectStore, pool, handler.Options{MaxFileSize: cfg.MaxFileSize, URLExpiry: time.Hour})
 
 	grpcServer := grpc.NewServer()
-	filesv1.RegisterFilesServiceServer(grpcServer, grpcserver.New(fileStore, objectStore, grpcserver.Options{MaxFileSize: cfg.MaxFileSize}))
+	filesv1.RegisterFilesServiceServer(grpcServer, grpcserver.New(fileStore, objectStore, grpcserver.Options{
+		MaxFileSize: cfg.MaxFileSize,
+		URLExpiry:   cfg.URLExpiry,
+	}))
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	healthServer.SetServingStatus("agynio.api.files.v1.FilesService", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 	grpcListener, err := net.Listen("tcp", cfg.GRPCAddress)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.GRPCAddress, err)
 	}
 
-	router := chi.NewRouter()
-	router.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
-	h.RegisterRoutes(router)
-
-	server := &http.Server{
-		Addr:         cfg.HTTPAddress,
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	errCh := make(chan error, 2)
-
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("http shutdown: %v", err)
-		}
-
+		healthServer.Shutdown()
 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer grpcCancel()
 		grpcDone := make(chan struct{})
@@ -112,38 +97,12 @@ func run() error {
 		}
 	}()
 
-	go func() {
-		log.Printf("Files HTTP listening on %s", cfg.HTTPAddress)
-		if err := server.ListenAndServe(); err != nil {
-			if errors.Is(err, http.ErrServerClosed) {
-				errCh <- nil
-				return
-			}
-			errCh <- fmt.Errorf("serve http: %w", err)
-			return
+	log.Printf("Files gRPC listening on %s", cfg.GRPCAddress)
+	if err := grpcServer.Serve(grpcListener); err != nil {
+		if errors.Is(err, grpc.ErrServerStopped) {
+			return nil
 		}
-		errCh <- nil
-	}()
-
-	go func() {
-		log.Printf("Files gRPC listening on %s", cfg.GRPCAddress)
-		if err := grpcServer.Serve(grpcListener); err != nil {
-			if errors.Is(err, grpc.ErrServerStopped) {
-				errCh <- nil
-				return
-			}
-			errCh <- fmt.Errorf("serve grpc: %w", err)
-			return
-		}
-		errCh <- nil
-	}()
-
-	var runErr error
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil && runErr == nil {
-			runErr = err
-			stop()
-		}
+		return fmt.Errorf("serve grpc: %w", err)
 	}
-	return runErr
+	return nil
 }
