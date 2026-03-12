@@ -18,6 +18,15 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Setup Buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          version: 1.66.0
+
+      - name: Generate protobuf stubs
+        run: buf generate buf.build/agynio/api --path agynio/api/files/v1
+
       - name: Go vet
         run: go vet ./...
 
