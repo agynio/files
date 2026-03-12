@@ -57,14 +57,14 @@ service:
   annotations: {}
   labels: {}
   ports:
-    - name: http
-      port: 8080
-      targetPort: http
+    - name: grpc
+      port: 50051
+      targetPort: grpc
       protocol: TCP
 
 containerPorts:
-  - name: http
-    containerPort: 8080
+  - name: grpc
+    containerPort: 50051
     protocol: TCP
 
 command: []
@@ -86,15 +86,13 @@ lifecycle: {}
 
 livenessProbe:
   enabled: true
-  httpGet:
-    path: /healthz
-    port: http
+  grpc:
+    port: 50051
 
 readinessProbe:
   enabled: true
-  httpGet:
-    path: /healthz
-    port: http
+  grpc:
+    port: 50051
 
 startupProbe:
   enabled: false
@@ -130,12 +128,7 @@ ingress:
   enabled: false
   ingressClassName: nginx
   annotations: {}
-  hosts:
-    - host: files.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-          servicePort: http
+  hosts: []
   tls: []
 
 metrics:
@@ -150,15 +143,12 @@ metrics:
     annotations: {}
     relabelings: []
     metricRelabelings: []
-    endpoints:
-      - port: http
-        path: /metrics
-        interval: ""
-        scrapeTimeout: ""
+    endpoints: []
 
 files:
-  httpAddress: ":8080"
+  grpcAddress: ":50051"
   maxFileSize: 20971520
+  urlExpiry: "1h"
   databaseUrl:
     value: ""
     existingSecret: ""
