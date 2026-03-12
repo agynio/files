@@ -17,12 +17,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w" -o /out/files ./cmd/files
 
-FROM gcr.io/distroless/base-debian12 AS runtime
+FROM gcr.io/distroless/base-debian12:nonroot AS runtime
 
 WORKDIR /app
 
 COPY --from=builder /out/files /usr/local/bin/files
-
-USER nonroot:nonroot
 
 ENTRYPOINT ["/usr/local/bin/files"]
