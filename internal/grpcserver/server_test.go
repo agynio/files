@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
+	filesv1 "github.com/agynio/files/.gen/go/agynio/api/files/v1"
 	"github.com/agynio/files/internal/filestore"
 	"github.com/agynio/files/internal/model"
 	"github.com/google/uuid"
