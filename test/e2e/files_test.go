@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	filesv1 "github.com/agynio/files/.gen/go/agynio/api/files/v1"
+	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
+	"github.com/agynio/files/internal/identity"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -24,10 +25,10 @@ const (
 
 func identityContext(ctx context.Context) context.Context {
 	return metadata.NewOutgoingContext(ctx, metadata.Pairs(
-		"x-agyn-tenant-id", testTenantID,
-		"x-agyn-identity-id", testIdentityID,
-		"x-agyn-identity-type", testIdentityType,
-		"x-agyn-auth-method", testAuthMethod,
+		identity.MetadataKeyTenantID, testTenantID,
+		identity.MetadataKeyIdentityID, testIdentityID,
+		identity.MetadataKeyIdentityType, testIdentityType,
+		identity.MetadataKeyAuthMethod, testAuthMethod,
 	))
 }
 

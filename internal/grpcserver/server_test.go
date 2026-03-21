@@ -9,6 +9,7 @@ import (
 
 	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
 	"github.com/agynio/files/internal/filestore"
+	"github.com/agynio/files/internal/identity"
 	"github.com/agynio/files/internal/model"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -121,10 +122,10 @@ var (
 
 func identityContext(ctx context.Context) context.Context {
 	return metadata.NewIncomingContext(ctx, metadata.Pairs(
-		"x-agyn-tenant-id", testTenantID.String(),
-		"x-agyn-identity-id", testIdentityID,
-		"x-agyn-identity-type", testIdentityType,
-		"x-agyn-auth-method", testAuthMethod,
+		identity.MetadataKeyTenantID, testTenantID.String(),
+		identity.MetadataKeyIdentityID, testIdentityID,
+		identity.MetadataKeyIdentityType, testIdentityType,
+		identity.MetadataKeyAuthMethod, testAuthMethod,
 	))
 }
 

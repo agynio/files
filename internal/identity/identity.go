@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	tenantIDKey     = "x-agyn-tenant-id"
-	identityIDKey   = "x-agyn-identity-id"
-	identityTypeKey = "x-agyn-identity-type"
-	authMethodKey   = "x-agyn-auth-method"
+	MetadataKeyTenantID     = "x-agyn-tenant-id"
+	MetadataKeyIdentityID   = "x-agyn-identity-id"
+	MetadataKeyIdentityType = "x-agyn-identity-type"
+	MetadataKeyAuthMethod   = "x-agyn-auth-method"
 )
 
 type Identity struct {
@@ -30,7 +30,7 @@ func FromContext(ctx context.Context) (Identity, error) {
 		return Identity{}, errors.New("identity metadata is required")
 	}
 
-	tenantValue, err := requiredValue(md, tenantIDKey)
+	tenantValue, err := requiredValue(md, MetadataKeyTenantID)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -39,15 +39,15 @@ func FromContext(ctx context.Context) (Identity, error) {
 		return Identity{}, fmt.Errorf("tenant_id must be a valid UUID")
 	}
 
-	identityID, err := requiredValue(md, identityIDKey)
+	identityID, err := requiredValue(md, MetadataKeyIdentityID)
 	if err != nil {
 		return Identity{}, err
 	}
-	identityType, err := requiredValue(md, identityTypeKey)
+	identityType, err := requiredValue(md, MetadataKeyIdentityType)
 	if err != nil {
 		return Identity{}, err
 	}
-	authMethod, err := requiredValue(md, authMethodKey)
+	authMethod, err := requiredValue(md, MetadataKeyAuthMethod)
 	if err != nil {
 		return Identity{}, err
 	}
