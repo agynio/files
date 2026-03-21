@@ -22,17 +22,17 @@ func New(pool *pgxpool.Pool) *Store {
 }
 
 func (s *Store) CreateFile(ctx context.Context, record model.FileRecord) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO files (tenant_id, id, filename, content_type, size_bytes) VALUES ($1, $2, $3, $4, $5)`, record.TenantID, record.ID, record.Filename, record.ContentType, record.SizeBytes)
+	_, err := s.pool.Exec(ctx, `INSERT INTO files (id, filename, content_type, size_bytes) VALUES ($1, $2, $3, $4)`, record.ID, record.Filename, record.ContentType, record.SizeBytes)
 	if err != nil {
 		return fmt.Errorf("insert file: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) GetFile(ctx context.Context, tenantID, id uuid.UUID) (model.FileRecord, error) {
-	row := s.pool.QueryRow(ctx, `SELECT tenant_id, id, filename, content_type, size_bytes, created_at FROM files WHERE tenant_id = $1 AND id = $2`, tenantID, id)
+func (s *Store) GetFile(ctx context.Context, id uuid.UUID) (model.FileRecord, error) {
+	row := s.pool.QueryRow(ctx, `SELECT id, filename, content_type, size_bytes, created_at FROM files WHERE id = $1`, id)
 	var record model.FileRecord
-	if err := row.Scan(&record.TenantID, &record.ID, &record.Filename, &record.ContentType, &record.SizeBytes, &record.CreatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Filename, &record.ContentType, &record.SizeBytes, &record.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.FileRecord{}, ErrFileNotFound
 		}

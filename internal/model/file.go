@@ -7,7 +7,6 @@ import (
 )
 
 type FileRecord struct {
-	TenantID    uuid.UUID
 	ID          uuid.UUID
 	Filename    string
 	ContentType string
