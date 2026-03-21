@@ -11,6 +11,7 @@ import (
 	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
 	"github.com/agynio/files/internal/filestore"
 	"github.com/agynio/files/internal/filetype"
+	"github.com/agynio/files/internal/identity"
 	"github.com/agynio/files/internal/model"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -25,7 +26,7 @@ const (
 
 type FileStore interface {
 	CreateFile(ctx context.Context, record model.FileRecord) error
-	GetFile(ctx context.Context, id uuid.UUID) (model.FileRecord, error)
+	GetFile(ctx context.Context, tenantID, id uuid.UUID) (model.FileRecord, error)
 }
 
 type ObjectStore interface {
@@ -77,8 +78,16 @@ func New(store FileStore, objectStore ObjectStore, opts Options) *Server {
 	}
 }
 
+func objectKey(tenantID, fileID uuid.UUID) string {
+	return fmt.Sprintf("%s/%s", tenantID, fileID)
+}
+
 func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error {
 	ctx := stream.Context()
+	caller, err := identity.FromContext(ctx)
+	if err != nil {
+		return status.Errorf(codes.Unauthenticated, "identity: %v", err)
+	}
 
 	first, err := stream.Recv()
 	if err == io.EOF {
@@ -114,7 +123,7 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 	}
 
 	id := s.newID()
-	key := id.String()
+	key := objectKey(caller.TenantID, id)
 
 	reader, writer := io.Pipe()
 	var putErr error
@@ -175,6 +184,7 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 
 	createdAt := s.now().UTC()
 	record := model.FileRecord{
+		TenantID:    caller.TenantID,
 		ID:          id,
 		Filename:    filename,
 		ContentType: contentType,
@@ -189,6 +199,11 @@ func (s *Server) UploadFile(stream filesv1.FilesService_UploadFileServer) error 
 }
 
 func (s *Server) GetFileMetadata(ctx context.Context, req *filesv1.GetFileMetadataRequest) (*filesv1.GetFileMetadataResponse, error) {
+	caller, err := identity.FromContext(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "identity: %v", err)
+	}
+
 	fileID := strings.TrimSpace(req.GetFileId())
 	if fileID == "" {
 		return nil, status.Error(codes.InvalidArgument, "file_id is required")
@@ -198,7 +213,7 @@ func (s *Server) GetFileMetadata(ctx context.Context, req *filesv1.GetFileMetada
 		return nil, status.Error(codes.InvalidArgument, "file_id must be a valid UUID")
 	}
 
-	record, err := s.store.GetFile(ctx, id)
+	record, err := s.store.GetFile(ctx, caller.TenantID, id)
 	if err != nil {
 		if errors.Is(err, filestore.ErrFileNotFound) {
 			return nil, status.Error(codes.NotFound, "file not found")
@@ -210,6 +225,11 @@ func (s *Server) GetFileMetadata(ctx context.Context, req *filesv1.GetFileMetada
 }
 
 func (s *Server) GetDownloadUrl(ctx context.Context, req *filesv1.GetDownloadUrlRequest) (*filesv1.GetDownloadUrlResponse, error) {
+	caller, err := identity.FromContext(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "identity: %v", err)
+	}
+
 	fileID := strings.TrimSpace(req.GetFileId())
 	if fileID == "" {
 		return nil, status.Error(codes.InvalidArgument, "file_id is required")
@@ -230,7 +250,7 @@ func (s *Server) GetDownloadUrl(ctx context.Context, req *filesv1.GetDownloadUrl
 		}
 	}
 
-	record, err := s.store.GetFile(ctx, id)
+	record, err := s.store.GetFile(ctx, caller.TenantID, id)
 	if err != nil {
 		if errors.Is(err, filestore.ErrFileNotFound) {
 			return nil, status.Error(codes.NotFound, "file not found")
@@ -238,7 +258,7 @@ func (s *Server) GetDownloadUrl(ctx context.Context, req *filesv1.GetDownloadUrl
 		return nil, status.Errorf(codes.Internal, "get file: %v", err)
 	}
 
-	url, err := s.objectStore.PresignGetURL(ctx, record.ID.String(), expiry)
+	url, err := s.objectStore.PresignGetURL(ctx, objectKey(caller.TenantID, record.ID), expiry)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "presign download url: %v", err)
 	}
