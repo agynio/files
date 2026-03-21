@@ -7,9 +7,8 @@ import (
 	"testing"
 	"time"
 
-	filesv1 "github.com/agynio/files/gen/go/agynio/api/files/v1"
+	filesv1 "github.com/agynio/files/.gen/go/agynio/api/files/v1"
 	"github.com/agynio/files/internal/filestore"
-	"github.com/agynio/files/internal/identity"
 	"github.com/agynio/files/internal/model"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -25,7 +24,6 @@ type fakeFileStore struct {
 	getRecord   model.FileRecord
 	getErr      error
 	getCalls    int
-	getTenantID uuid.UUID
 	getID       uuid.UUID
 }
 
@@ -35,9 +33,8 @@ func (f *fakeFileStore) CreateFile(ctx context.Context, record model.FileRecord)
 	return f.createErr
 }
 
-func (f *fakeFileStore) GetFile(ctx context.Context, tenantID, id uuid.UUID) (model.FileRecord, error) {
+func (f *fakeFileStore) GetFile(ctx context.Context, id uuid.UUID) (model.FileRecord, error) {
 	f.getCalls++
-	f.getTenantID = tenantID
 	f.getID = id
 	if f.getErr != nil {
 		return model.FileRecord{}, f.getErr
@@ -113,22 +110,6 @@ func (f *fakeUploadStream) Context() context.Context     { return f.ctx }
 func (f *fakeUploadStream) SendMsg(any) error            { return nil }
 func (f *fakeUploadStream) RecvMsg(any) error            { return nil }
 
-var (
-	testTenantID     = uuid.MustParse("6b93bede-1e0c-4e83-a3b1-4f1ca5f68493")
-	testIdentityID   = "identity-123"
-	testIdentityType = "user"
-	testAuthMethod   = "test"
-)
-
-func identityContext(ctx context.Context) context.Context {
-	return metadata.NewIncomingContext(ctx, metadata.Pairs(
-		identity.MetadataKeyTenantID, testTenantID.String(),
-		identity.MetadataKeyIdentityID, testIdentityID,
-		identity.MetadataKeyIdentityType, testIdentityType,
-		identity.MetadataKeyAuthMethod, testAuthMethod,
-	))
-}
-
 func TestUploadFileSuccess(t *testing.T) {
 	fixedID := uuid.MustParse("5b49f320-28ba-4f73-9c38-d4f371a6a4be")
 	fixedTime := time.Date(2025, 4, 6, 7, 8, 9, 0, time.UTC)
@@ -147,7 +128,7 @@ func TestUploadFileSuccess(t *testing.T) {
 	chunkA := []byte("hello ")
 	chunkB := []byte("world")
 	stream := &fakeUploadStream{
-		ctx: identityContext(context.Background()),
+		ctx: context.Background(),
 		requests: []*filesv1.UploadFileRequest{
 			metadataRequest("greeting.txt", "text/plain", int64(len(chunkA)+len(chunkB))),
 			chunkRequest(chunkA),
@@ -174,8 +155,8 @@ func TestUploadFileSuccess(t *testing.T) {
 	if objectStore.putCalls != 1 {
 		t.Fatalf("expected object store put call")
 	}
-	if objectStore.key != objectKey(testTenantID, fixedID) {
-		t.Fatalf("expected key %s, got %s", objectKey(testTenantID, fixedID), objectStore.key)
+	if objectStore.key != objectKey(fixedID) {
+		t.Fatalf("expected key %s, got %s", objectKey(fixedID), objectStore.key)
 	}
 	if objectStore.size != int64(len(chunkA)+len(chunkB)) {
 		t.Fatalf("expected size %d, got %d", len(chunkA)+len(chunkB), objectStore.size)
@@ -190,37 +171,8 @@ func TestUploadFileSuccess(t *testing.T) {
 	if store.createCalls != 1 {
 		t.Fatalf("expected create file called")
 	}
-	if store.created.TenantID != testTenantID {
-		t.Fatalf("expected tenant_id %s, got %s", testTenantID, store.created.TenantID)
-	}
 	if store.created.CreatedAt != fixedTime {
 		t.Fatalf("expected created_at %v, got %v", fixedTime, store.created.CreatedAt)
-	}
-}
-
-func TestUploadFileMissingIdentity(t *testing.T) {
-	store := &fakeFileStore{}
-	objectStore := &fakeObjectStore{}
-	server := New(store, objectStore, Options{MaxFileSize: 1024})
-
-	data := []byte("data")
-	stream := &fakeUploadStream{
-		ctx: context.Background(),
-		requests: []*filesv1.UploadFileRequest{
-			metadataRequest("data.txt", "text/plain", int64(len(data))),
-			chunkRequest(data),
-		},
-	}
-
-	err := server.UploadFile(stream)
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("expected unauthenticated, got %v", err)
-	}
-	if objectStore.putCalls != 0 {
-		t.Fatalf("expected no object store calls")
-	}
-	if store.createCalls != 0 {
-		t.Fatalf("expected no create file calls")
 	}
 }
 
@@ -229,7 +181,7 @@ func TestUploadFileMissingMetadata(t *testing.T) {
 	objectStore := &fakeObjectStore{}
 	server := New(store, objectStore, Options{MaxFileSize: 1024})
 
-	stream := &fakeUploadStream{ctx: identityContext(context.Background())}
+	stream := &fakeUploadStream{ctx: context.Background()}
 
 	err := server.UploadFile(stream)
 	if status.Code(err) != codes.InvalidArgument {
@@ -249,7 +201,7 @@ func TestUploadFileInvalidMetadata(t *testing.T) {
 	server := New(store, objectStore, Options{MaxFileSize: 1024})
 
 	stream := &fakeUploadStream{
-		ctx: identityContext(context.Background()),
+		ctx: context.Background(),
 		requests: []*filesv1.UploadFileRequest{
 			metadataRequest("bad.txt", "not-a-type", 4),
 		},
@@ -274,7 +226,7 @@ func TestUploadFileChunkTooLarge(t *testing.T) {
 
 	data := make([]byte, maxChunkSize+1)
 	stream := &fakeUploadStream{
-		ctx: identityContext(context.Background()),
+		ctx: context.Background(),
 		requests: []*filesv1.UploadFileRequest{
 			metadataRequest("big.bin", "application/pdf", int64(len(data))),
 			chunkRequest(data),
@@ -297,7 +249,7 @@ func TestUploadFileDeclaredSizeTooSmall(t *testing.T) {
 
 	data := []byte("data")
 	stream := &fakeUploadStream{
-		ctx: identityContext(context.Background()),
+		ctx: context.Background(),
 		requests: []*filesv1.UploadFileRequest{
 			metadataRequest("data.txt", "text/plain", int64(len(data)-1)),
 			chunkRequest(data),
@@ -320,7 +272,7 @@ func TestUploadFileDeclaredSizeTooLarge(t *testing.T) {
 
 	data := []byte("data")
 	stream := &fakeUploadStream{
-		ctx: identityContext(context.Background()),
+		ctx: context.Background(),
 		requests: []*filesv1.UploadFileRequest{
 			metadataRequest("data.txt", "text/plain", int64(len(data)+1)),
 			chunkRequest(data),
@@ -343,7 +295,7 @@ func TestUploadFileObjectStoreFailure(t *testing.T) {
 
 	data := []byte("data")
 	stream := &fakeUploadStream{
-		ctx: identityContext(context.Background()),
+		ctx: context.Background(),
 		requests: []*filesv1.UploadFileRequest{
 			metadataRequest("data.txt", "text/plain", int64(len(data))),
 			chunkRequest(data),
@@ -363,7 +315,6 @@ func TestGetFileMetadataSuccess(t *testing.T) {
 	fileID := uuid.MustParse("2d2f1af2-2dc7-4bc7-9f6d-e4d30aa3e2d6")
 	createdAt := time.Date(2025, 5, 6, 7, 8, 9, 0, time.UTC)
 	store := &fakeFileStore{getRecord: model.FileRecord{
-		TenantID:    testTenantID,
 		ID:          fileID,
 		Filename:    "report.pdf",
 		ContentType: "application/pdf",
@@ -373,7 +324,7 @@ func TestGetFileMetadataSuccess(t *testing.T) {
 	objectStore := &fakeObjectStore{}
 	server := New(store, objectStore, Options{MaxFileSize: 1024})
 
-	resp, err := server.GetFileMetadata(identityContext(context.Background()), &filesv1.GetFileMetadataRequest{FileId: fileID.String()})
+	resp, err := server.GetFileMetadata(context.Background(), &filesv1.GetFileMetadataRequest{FileId: fileID.String()})
 	if err != nil {
 		t.Fatalf("get file metadata: %v", err)
 	}
@@ -389,29 +340,13 @@ func TestGetFileMetadataSuccess(t *testing.T) {
 	if store.getCalls != 1 {
 		t.Fatalf("expected get file called once")
 	}
-	if store.getTenantID != testTenantID {
-		t.Fatalf("expected tenant_id %s, got %s", testTenantID, store.getTenantID)
-	}
-}
-
-func TestGetFileMetadataMissingIdentity(t *testing.T) {
-	store := &fakeFileStore{}
-	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
-
-	_, err := server.GetFileMetadata(context.Background(), &filesv1.GetFileMetadataRequest{FileId: uuid.NewString()})
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("expected unauthenticated, got %v", err)
-	}
-	if store.getCalls != 0 {
-		t.Fatalf("expected no get file calls")
-	}
 }
 
 func TestGetFileMetadataNotFound(t *testing.T) {
 	store := &fakeFileStore{getErr: filestore.ErrFileNotFound}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetFileMetadata(identityContext(context.Background()), &filesv1.GetFileMetadataRequest{FileId: uuid.NewString()})
+	_, err := server.GetFileMetadata(context.Background(), &filesv1.GetFileMetadataRequest{FileId: uuid.NewString()})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -421,7 +356,7 @@ func TestGetFileMetadataInvalidUUID(t *testing.T) {
 	store := &fakeFileStore{}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetFileMetadata(identityContext(context.Background()), &filesv1.GetFileMetadataRequest{FileId: "nope"})
+	_, err := server.GetFileMetadata(context.Background(), &filesv1.GetFileMetadataRequest{FileId: "nope"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
 	}
@@ -434,7 +369,7 @@ func TestGetFileMetadataEmptyFileId(t *testing.T) {
 	store := &fakeFileStore{}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetFileMetadata(identityContext(context.Background()), &filesv1.GetFileMetadataRequest{})
+	_, err := server.GetFileMetadata(context.Background(), &filesv1.GetFileMetadataRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
 	}
@@ -447,7 +382,7 @@ func TestGetFileMetadataStoreError(t *testing.T) {
 	store := &fakeFileStore{getErr: errors.New("boom")}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetFileMetadata(identityContext(context.Background()), &filesv1.GetFileMetadataRequest{FileId: uuid.NewString()})
+	_, err := server.GetFileMetadata(context.Background(), &filesv1.GetFileMetadataRequest{FileId: uuid.NewString()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
 	}
@@ -456,7 +391,7 @@ func TestGetFileMetadataStoreError(t *testing.T) {
 func TestGetDownloadUrlSuccess(t *testing.T) {
 	fileID := uuid.MustParse("ab7f1810-1d10-4fe0-b4bb-d1b9f3859862")
 	fixedNow := time.Date(2025, 6, 7, 8, 9, 10, 0, time.UTC)
-	store := &fakeFileStore{getRecord: model.FileRecord{TenantID: testTenantID, ID: fileID}}
+	store := &fakeFileStore{getRecord: model.FileRecord{ID: fileID}}
 	objectStore := &fakeObjectStore{presignURL: "https://example.com/file"}
 	server := New(store, objectStore, Options{
 		MaxFileSize: 1024,
@@ -466,7 +401,7 @@ func TestGetDownloadUrlSuccess(t *testing.T) {
 		URLExpiry: 2 * time.Hour,
 	})
 
-	resp, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
+	resp, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
 	if err != nil {
 		t.Fatalf("get download url: %v", err)
 	}
@@ -479,18 +414,15 @@ func TestGetDownloadUrlSuccess(t *testing.T) {
 	if objectStore.presignExpiry != 2*time.Hour {
 		t.Fatalf("expected expiry 2h, got %v", objectStore.presignExpiry)
 	}
-	if objectStore.presignKey != objectKey(testTenantID, fileID) {
-		t.Fatalf("expected key %s, got %s", objectKey(testTenantID, fileID), objectStore.presignKey)
-	}
-	if store.getTenantID != testTenantID {
-		t.Fatalf("expected tenant_id %s, got %s", testTenantID, store.getTenantID)
+	if objectStore.presignKey != objectKey(fileID) {
+		t.Fatalf("expected key %s, got %s", objectKey(fileID), objectStore.presignKey)
 	}
 }
 
 func TestGetDownloadUrlCustomExpiry(t *testing.T) {
 	fileID := uuid.MustParse("e49e9cad-6d12-4d07-8430-00a5cdbf226d")
 	fixedNow := time.Date(2025, 7, 8, 9, 10, 11, 0, time.UTC)
-	store := &fakeFileStore{getRecord: model.FileRecord{TenantID: testTenantID, ID: fileID}}
+	store := &fakeFileStore{getRecord: model.FileRecord{ID: fileID}}
 	objectStore := &fakeObjectStore{presignURL: "https://example.com/custom"}
 	server := New(store, objectStore, Options{
 		MaxFileSize: 1024,
@@ -500,7 +432,7 @@ func TestGetDownloadUrlCustomExpiry(t *testing.T) {
 		URLExpiry: time.Hour,
 	})
 
-	resp, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{
+	resp, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{
 		FileId: fileID.String(),
 		Expiry: durationpb.New(30 * time.Minute),
 	})
@@ -515,25 +447,11 @@ func TestGetDownloadUrlCustomExpiry(t *testing.T) {
 	}
 }
 
-func TestGetDownloadUrlMissingIdentity(t *testing.T) {
-	fileID := uuid.MustParse("1d50d665-6e5d-4988-af9d-c2681dcc8ffa")
-	store := &fakeFileStore{}
-	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024, URLExpiry: time.Hour})
-
-	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("expected unauthenticated, got %v", err)
-	}
-	if store.getCalls != 0 {
-		t.Fatalf("expected no get file calls")
-	}
-}
-
 func TestGetDownloadUrlNotFound(t *testing.T) {
 	store := &fakeFileStore{getErr: filestore.ErrFileNotFound}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{FileId: uuid.NewString()})
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: uuid.NewString()})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -543,7 +461,7 @@ func TestGetDownloadUrlInvalidUUID(t *testing.T) {
 	store := &fakeFileStore{}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{FileId: "bad"})
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: "bad"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
 	}
@@ -556,7 +474,7 @@ func TestGetDownloadUrlEmptyFileId(t *testing.T) {
 	store := &fakeFileStore{}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{})
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
 	}
@@ -570,7 +488,7 @@ func TestGetDownloadUrlNegativeExpiry(t *testing.T) {
 	store := &fakeFileStore{}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024, URLExpiry: time.Hour})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{
 		FileId: fileID.String(),
 		Expiry: durationpb.New(-5 * time.Minute),
 	})
@@ -584,7 +502,7 @@ func TestGetDownloadUrlExpiryExceedsMax(t *testing.T) {
 	store := &fakeFileStore{}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024, URLExpiry: time.Hour})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{
 		FileId: fileID.String(),
 		Expiry: durationpb.New(25 * time.Hour),
 	})
@@ -599,7 +517,7 @@ func TestGetDownloadUrlPresignError(t *testing.T) {
 	objectStore := &fakeObjectStore{presignErr: errors.New("boom")}
 	server := New(store, objectStore, Options{MaxFileSize: 1024, URLExpiry: time.Hour})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
 	}
@@ -610,7 +528,7 @@ func TestGetDownloadUrlStoreError(t *testing.T) {
 	store := &fakeFileStore{getErr: errors.New("boom")}
 	server := New(store, &fakeObjectStore{}, Options{MaxFileSize: 1024, URLExpiry: time.Hour})
 
-	_, err := server.GetDownloadUrl(identityContext(context.Background()), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
+	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
 	}
