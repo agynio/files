@@ -252,7 +252,7 @@ func (s *Server) GetDownloadUrl(ctx context.Context, req *filesv1.GetDownloadUrl
 	}, nil
 }
 
-func (s *Server) GetFileContent(req *filesv1.GetFileContentRequest, stream filesv1.FilesService_GetFileContentServer) error {
+func (s *Server) GetFileContent(req *filesv1.GetFileContentRequest, stream filesv1.FilesService_GetFileContentServer) (retErr error) {
 	ctx := stream.Context()
 	fileID := strings.TrimSpace(req.GetFileId())
 	if fileID == "" {
@@ -275,12 +275,15 @@ func (s *Server) GetFileContent(req *filesv1.GetFileContentRequest, stream files
 	if err != nil {
 		return status.Errorf(codes.Internal, "get object: %v", err)
 	}
-	closeWithError := func(primary error, message string) error {
+	defer func() {
 		if closeErr := object.Close(); closeErr != nil {
-			return status.Errorf(codes.Internal, "%s: %v (close object: %v)", message, primary, closeErr)
+			if retErr == nil {
+				retErr = status.Errorf(codes.Internal, "close object: %v", closeErr)
+				return
+			}
+			retErr = status.Errorf(codes.Internal, "%v (close object: %v)", retErr, closeErr)
 		}
-		return status.Errorf(codes.Internal, "%s: %v", message, primary)
-	}
+	}()
 
 	buf := make([]byte, fileContentChunkSize)
 	for {
@@ -288,18 +291,15 @@ func (s *Server) GetFileContent(req *filesv1.GetFileContentRequest, stream files
 		if readBytes > 0 {
 			chunk := &filesv1.GetFileContentResponse{ChunkData: buf[:readBytes]}
 			if sendErr := stream.Send(chunk); sendErr != nil {
-				return closeWithError(sendErr, "send chunk")
+				return status.Errorf(codes.Internal, "send chunk: %v", sendErr)
 			}
 		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return closeWithError(err, "read object")
+			return status.Errorf(codes.Internal, "read object: %v", err)
 		}
-	}
-	if err := object.Close(); err != nil {
-		return status.Errorf(codes.Internal, "close object: %v", err)
 	}
 	return nil
 }

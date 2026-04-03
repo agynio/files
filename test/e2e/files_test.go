@@ -10,6 +10,7 @@ import (
 	"time"
 
 	filesv1 "github.com/agynio/files/.gen/go/agynio/api/files/v1"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -111,5 +112,32 @@ func TestGetFileContentRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(received, content) {
 		t.Fatalf("downloaded content does not match")
+	}
+}
+
+func TestGetFileContentNotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := grpc.NewClient(filesAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial files: %v", err)
+	}
+	defer conn.Close()
+
+	client := filesv1.NewFilesServiceClient(conn)
+	stream, err := client.GetFileContent(ctx, &filesv1.GetFileContentRequest{FileId: uuid.NewString()})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.NotFound {
+		t.Fatalf("expected NotFound, got %s: %s", st.Code(), st.Message())
 	}
 }
