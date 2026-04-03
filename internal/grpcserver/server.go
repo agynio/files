@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	maxChunkSize = 256 * 1024
-	maxURLExpiry = 24 * time.Hour
+	maxChunkSize         = 256 * 1024
+	fileContentChunkSize = 64 * 1024
+	maxURLExpiry         = 24 * time.Hour
 )
 
 type FileStore interface {
@@ -30,6 +31,7 @@ type FileStore interface {
 
 type ObjectStore interface {
 	PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error
+	GetObject(ctx context.Context, key string) (io.ReadCloser, error)
 	PresignGetURL(ctx context.Context, key string, expiry time.Duration) (string, error)
 }
 
@@ -252,6 +254,58 @@ func (s *Server) GetDownloadUrl(ctx context.Context, req *filesv1.GetDownloadUrl
 		Url:       url,
 		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
+}
+
+func (s *Server) GetFileContent(req *filesv1.GetFileContentRequest, stream filesv1.FilesService_GetFileContentServer) (retErr error) {
+	ctx := stream.Context()
+	fileID := strings.TrimSpace(req.GetFileId())
+	if fileID == "" {
+		return status.Error(codes.InvalidArgument, "file_id is required")
+	}
+	id, err := uuid.Parse(fileID)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "file_id must be a valid UUID")
+	}
+
+	record, err := s.store.GetFile(ctx, id)
+	if err != nil {
+		if errors.Is(err, filestore.ErrFileNotFound) {
+			return status.Error(codes.NotFound, "file not found")
+		}
+		return status.Errorf(codes.Internal, "get file: %v", err)
+	}
+
+	object, err := s.objectStore.GetObject(ctx, record.ID.String())
+	if err != nil {
+		return status.Errorf(codes.Internal, "get object: %v", err)
+	}
+	defer func() {
+		if closeErr := object.Close(); closeErr != nil {
+			if retErr == nil {
+				retErr = status.Errorf(codes.Internal, "close object: %v", closeErr)
+				return
+			}
+			retErr = status.Errorf(codes.Internal, "%v (close object: %v)", retErr, closeErr)
+		}
+	}()
+
+	buf := make([]byte, fileContentChunkSize)
+	for {
+		readBytes, err := object.Read(buf)
+		if readBytes > 0 {
+			chunk := &filesv1.GetFileContentResponse{ChunkData: buf[:readBytes]}
+			if sendErr := stream.Send(chunk); sendErr != nil {
+				return status.Errorf(codes.Internal, "send chunk: %v", sendErr)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return status.Errorf(codes.Internal, "read object: %v", err)
+		}
+	}
+	return nil
 }
 
 func toProtoFileInfo(record model.FileRecord) *filesv1.FileInfo {

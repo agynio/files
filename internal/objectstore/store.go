@@ -26,6 +26,14 @@ func (s *Store) PutObject(ctx context.Context, key string, reader io.Reader, siz
 	return nil
 }
 
+func (s *Store) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get object: %w", err)
+	}
+	return object, nil
+}
+
 func (s *Store) PresignGetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	url, err := s.client.PresignedGetObject(ctx, s.bucket, key, expiry, nil)
 	if err != nil {
