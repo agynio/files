@@ -141,19 +141,20 @@ pipelines:
     run: |-
       disable_argocd_sync
       deploy_pr_image
-      set +e
       create_deployments e2e-runner
       start_dev e2e-runner &
       sleep 5
+      set +e
       exec_container \
         --label-selector "app.kubernetes.io/name=files-e2e" \
         -n ${FILES_NAMESPACE} \
         -- bash -c 'cd /opt/app/data && buf generate buf.build/agynio/api --path agynio/api/files/v1 && go test -v -count=1 -tags e2e ./test/e2e/'
       EXIT_CODE=$?
+      set -e
       stop_dev e2e-runner
       purge_deployments e2e-runner
       restore_argocd_sync
-      exit $EXIT_CODE
+      exit ${EXIT_CODE}
 
 hooks:
   - name: restore-argocd-auto-sync
