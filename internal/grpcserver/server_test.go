@@ -211,6 +211,62 @@ func TestUploadFileSuccess(t *testing.T) {
 	}
 }
 
+func TestUploadFileAllowsMediaContentTypes(t *testing.T) {
+	cases := []struct {
+		name        string
+		filename    string
+		contentType string
+	}{
+		{name: "video", filename: "clip.mp4", contentType: "video/mp4"},
+		{name: "audio", filename: "track.mp3", contentType: "audio/mpeg"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &fakeFileStore{}
+			objectStore := &fakeObjectStore{}
+			server := New(store, objectStore, Options{MaxFileSize: 1024})
+
+			data := []byte("data")
+			stream := &fakeUploadStream{
+				ctx: context.Background(),
+				requests: []*filesv1.UploadFileRequest{
+					metadataRequest(testCase.filename, testCase.contentType, int64(len(data))),
+					chunkRequest(data),
+				},
+			}
+
+			if err := server.UploadFile(stream); err != nil {
+				t.Fatalf("upload file: %v", err)
+			}
+			if stream.resp == nil || stream.resp.File == nil {
+				t.Fatalf("expected response file")
+			}
+			if stream.resp.File.Id == "" {
+				t.Fatalf("expected file id to be set")
+			}
+			if stream.resp.File.Id != objectStore.key {
+				t.Fatalf("expected object key %s, got %s", stream.resp.File.Id, objectStore.key)
+			}
+			if stream.resp.File.ContentType != testCase.contentType {
+				t.Fatalf("expected content type %s, got %s", testCase.contentType, stream.resp.File.ContentType)
+			}
+			if objectStore.putCalls != 1 {
+				t.Fatalf("expected object store put call")
+			}
+			if objectStore.contentType != testCase.contentType {
+				t.Fatalf("expected object content type %s, got %s", testCase.contentType, objectStore.contentType)
+			}
+			if store.createCalls != 1 {
+				t.Fatalf("expected create file called")
+			}
+			if store.created.ContentType != testCase.contentType {
+				t.Fatalf("expected stored content type %s, got %s", testCase.contentType, store.created.ContentType)
+			}
+		})
+	}
+}
+
 func TestUploadFileMissingMetadata(t *testing.T) {
 	store := &fakeFileStore{}
 	objectStore := &fakeObjectStore{}

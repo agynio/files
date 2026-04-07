@@ -11,6 +11,8 @@ const DefaultMaxFileSize = int64(20 * 1024 * 1024)
 var allowedContentPrefixes = []string{
 	"image/",
 	"text/",
+	"video/",
+	"audio/",
 	"application/pdf",
 	"application/msword",
 	"application/vnd.openxmlformats-officedocument",
