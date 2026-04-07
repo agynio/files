@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -43,17 +44,21 @@ func (f *fakeFileStore) GetFile(ctx context.Context, id uuid.UUID) (model.FileRe
 }
 
 type fakeObjectStore struct {
-	data          []byte
-	key           string
-	size          int64
-	contentType   string
-	putCalls      int
-	putErr        error
-	presignURL    string
-	presignExpiry time.Duration
-	presignKey    string
-	presignCalls  int
-	presignErr    error
+	data           []byte
+	key            string
+	size           int64
+	contentType    string
+	putCalls       int
+	putErr         error
+	getObjectData  []byte
+	getObjectKey   string
+	getObjectErr   error
+	getObjectCalls int
+	presignURL     string
+	presignExpiry  time.Duration
+	presignKey     string
+	presignCalls   int
+	presignErr     error
 }
 
 func (f *fakeObjectStore) PutObject(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
@@ -70,6 +75,15 @@ func (f *fakeObjectStore) PutObject(ctx context.Context, key string, reader io.R
 		return f.putErr
 	}
 	return nil
+}
+
+func (f *fakeObjectStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	f.getObjectCalls++
+	f.getObjectKey = key
+	if f.getObjectErr != nil {
+		return nil, f.getObjectErr
+	}
+	return io.NopCloser(bytes.NewReader(f.getObjectData)), nil
 }
 
 func (f *fakeObjectStore) PresignGetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
@@ -109,6 +123,27 @@ func (f *fakeUploadStream) SetTrailer(metadata.MD)       {}
 func (f *fakeUploadStream) Context() context.Context     { return f.ctx }
 func (f *fakeUploadStream) SendMsg(any) error            { return nil }
 func (f *fakeUploadStream) RecvMsg(any) error            { return nil }
+
+type fakeContentStream struct {
+	ctx       context.Context
+	responses []*filesv1.GetFileContentResponse
+	sendErr   error
+}
+
+func (f *fakeContentStream) Send(resp *filesv1.GetFileContentResponse) error {
+	if f.sendErr != nil {
+		return f.sendErr
+	}
+	f.responses = append(f.responses, resp)
+	return nil
+}
+
+func (f *fakeContentStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeContentStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeContentStream) SetTrailer(metadata.MD)       {}
+func (f *fakeContentStream) Context() context.Context     { return f.ctx }
+func (f *fakeContentStream) SendMsg(any) error            { return nil }
+func (f *fakeContentStream) RecvMsg(any) error            { return nil }
 
 func TestUploadFileSuccess(t *testing.T) {
 	fixedID := uuid.MustParse("5b49f320-28ba-4f73-9c38-d4f371a6a4be")
@@ -173,6 +208,62 @@ func TestUploadFileSuccess(t *testing.T) {
 	}
 	if store.created.CreatedAt != fixedTime {
 		t.Fatalf("expected created_at %v, got %v", fixedTime, store.created.CreatedAt)
+	}
+}
+
+func TestUploadFileAllowsMediaContentTypes(t *testing.T) {
+	cases := []struct {
+		name        string
+		filename    string
+		contentType string
+	}{
+		{name: "video", filename: "clip.mp4", contentType: "video/mp4"},
+		{name: "audio", filename: "track.mp3", contentType: "audio/mpeg"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &fakeFileStore{}
+			objectStore := &fakeObjectStore{}
+			server := New(store, objectStore, Options{MaxFileSize: 1024})
+
+			data := []byte("data")
+			stream := &fakeUploadStream{
+				ctx: context.Background(),
+				requests: []*filesv1.UploadFileRequest{
+					metadataRequest(testCase.filename, testCase.contentType, int64(len(data))),
+					chunkRequest(data),
+				},
+			}
+
+			if err := server.UploadFile(stream); err != nil {
+				t.Fatalf("upload file: %v", err)
+			}
+			if stream.resp == nil || stream.resp.File == nil {
+				t.Fatalf("expected response file")
+			}
+			if stream.resp.File.Id == "" {
+				t.Fatalf("expected file id to be set")
+			}
+			if stream.resp.File.Id != objectStore.key {
+				t.Fatalf("expected object key %s, got %s", stream.resp.File.Id, objectStore.key)
+			}
+			if stream.resp.File.ContentType != testCase.contentType {
+				t.Fatalf("expected content type %s, got %s", testCase.contentType, stream.resp.File.ContentType)
+			}
+			if objectStore.putCalls != 1 {
+				t.Fatalf("expected object store put call")
+			}
+			if objectStore.contentType != testCase.contentType {
+				t.Fatalf("expected object content type %s, got %s", testCase.contentType, objectStore.contentType)
+			}
+			if store.createCalls != 1 {
+				t.Fatalf("expected create file called")
+			}
+			if store.created.ContentType != testCase.contentType {
+				t.Fatalf("expected stored content type %s, got %s", testCase.contentType, store.created.ContentType)
+			}
+		})
 	}
 }
 
@@ -531,6 +622,109 @@ func TestGetDownloadUrlStoreError(t *testing.T) {
 	_, err := server.GetDownloadUrl(context.Background(), &filesv1.GetDownloadUrlRequest{FileId: fileID.String()})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
+	}
+}
+
+func TestGetFileContentSuccess(t *testing.T) {
+	fileID := uuid.MustParse("89ea8583-4960-47ee-9970-728851b65996")
+	chunkSize := 64 * 1024
+	data := bytes.Repeat([]byte("a"), chunkSize+10)
+	store := &fakeFileStore{getRecord: model.FileRecord{ID: fileID}}
+	objectStore := &fakeObjectStore{getObjectData: data}
+	server := New(store, objectStore, Options{MaxFileSize: 1024})
+	stream := &fakeContentStream{ctx: context.Background()}
+
+	if err := server.GetFileContent(&filesv1.GetFileContentRequest{FileId: fileID.String()}, stream); err != nil {
+		t.Fatalf("get file content: %v", err)
+	}
+	if store.getCalls != 1 {
+		t.Fatalf("expected get file called once")
+	}
+	if objectStore.getObjectCalls != 1 {
+		t.Fatalf("expected get object called once")
+	}
+	if objectStore.getObjectKey != fileID.String() {
+		t.Fatalf("expected key %s, got %s", fileID, objectStore.getObjectKey)
+	}
+	if len(stream.responses) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(stream.responses))
+	}
+	var received []byte
+	for _, resp := range stream.responses {
+		if len(resp.ChunkData) > chunkSize {
+			t.Fatalf("chunk exceeds max size: %d", len(resp.ChunkData))
+		}
+		received = append(received, resp.ChunkData...)
+	}
+	if !bytes.Equal(received, data) {
+		t.Fatalf("received data does not match")
+	}
+}
+
+func TestGetFileContentInvalidUUID(t *testing.T) {
+	store := &fakeFileStore{}
+	objectStore := &fakeObjectStore{}
+	server := New(store, objectStore, Options{MaxFileSize: 1024})
+	stream := &fakeContentStream{ctx: context.Background()}
+
+	err := server.GetFileContent(&filesv1.GetFileContentRequest{FileId: "not-a-uuid"}, stream)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected invalid argument, got %v", err)
+	}
+	if store.getCalls != 0 {
+		t.Fatalf("expected no get file calls")
+	}
+	if objectStore.getObjectCalls != 0 {
+		t.Fatalf("expected no get object calls")
+	}
+}
+
+func TestGetFileContentEmptyFileId(t *testing.T) {
+	store := &fakeFileStore{}
+	objectStore := &fakeObjectStore{}
+	server := New(store, objectStore, Options{MaxFileSize: 1024})
+	stream := &fakeContentStream{ctx: context.Background()}
+
+	err := server.GetFileContent(&filesv1.GetFileContentRequest{}, stream)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected invalid argument, got %v", err)
+	}
+	if store.getCalls != 0 {
+		t.Fatalf("expected no get file calls")
+	}
+	if objectStore.getObjectCalls != 0 {
+		t.Fatalf("expected no get object calls")
+	}
+}
+
+func TestGetFileContentNotFound(t *testing.T) {
+	store := &fakeFileStore{getErr: filestore.ErrFileNotFound}
+	objectStore := &fakeObjectStore{}
+	server := New(store, objectStore, Options{MaxFileSize: 1024})
+	stream := &fakeContentStream{ctx: context.Background()}
+
+	err := server.GetFileContent(&filesv1.GetFileContentRequest{FileId: uuid.NewString()}, stream)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected not found, got %v", err)
+	}
+	if objectStore.getObjectCalls != 0 {
+		t.Fatalf("expected no get object calls")
+	}
+}
+
+func TestGetFileContentObjectStoreError(t *testing.T) {
+	fileID := uuid.MustParse("7c4ec88e-3391-41a6-8e9b-5682d9e6e63e")
+	store := &fakeFileStore{getRecord: model.FileRecord{ID: fileID}}
+	objectStore := &fakeObjectStore{getObjectErr: errors.New("boom")}
+	server := New(store, objectStore, Options{MaxFileSize: 1024})
+	stream := &fakeContentStream{ctx: context.Background()}
+
+	err := server.GetFileContent(&filesv1.GetFileContentRequest{FileId: fileID.String()}, stream)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected internal error, got %v", err)
+	}
+	if objectStore.getObjectCalls != 1 {
+		t.Fatalf("expected get object called once")
 	}
 }
 

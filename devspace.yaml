@@ -25,6 +25,16 @@ functions:
     else
       echo "WARNING: ArgoCD Application 'files' not found in argocd namespace."
     fi
+  deploy_pr_image: |-
+    echo "Deploying PR image to cluster..."
+    IMAGE="${PR_IMAGE:-}"
+    if [ -z "$IMAGE" ]; then
+      echo "ERROR: PR_IMAGE not set, aborting hot deploy"
+      exit 1
+    fi
+    kubectl set image deployment/files-files files="$IMAGE" -n ${FILES_NAMESPACE}
+    kubectl rollout status deployment/files-files -n ${FILES_NAMESPACE} --timeout=120s
+    echo "PR image deployed successfully"
   patch_deployment: |-
     echo "Patching files deployment for DevSpace..."
     kubectl patch deployment files-files -n ${FILES_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
@@ -129,17 +139,22 @@ pipelines:
 
   test:e2e:
     run: |-
+      disable_argocd_sync
+      deploy_pr_image
       create_deployments e2e-runner
       start_dev e2e-runner &
       sleep 5
+      set +e
       exec_container \
         --label-selector "app.kubernetes.io/name=files-e2e" \
         -n ${FILES_NAMESPACE} \
         -- bash -c 'cd /opt/app/data && buf generate buf.build/agynio/api --path agynio/api/files/v1 && go test -v -count=1 -tags e2e ./test/e2e/'
       EXIT_CODE=$?
+      set -e
       stop_dev e2e-runner
       purge_deployments e2e-runner
-      exit $EXIT_CODE
+      restore_argocd_sync
+      exit ${EXIT_CODE}
 
 hooks:
   - name: restore-argocd-auto-sync
