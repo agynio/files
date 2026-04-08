@@ -32,12 +32,12 @@ functions:
       echo "ERROR: PR_IMAGE not set, aborting hot deploy"
       exit 1
     fi
-    kubectl set image deployment/files-files files="$IMAGE" -n ${FILES_NAMESPACE}
-    kubectl rollout status deployment/files-files -n ${FILES_NAMESPACE} --timeout=120s
+    kubectl set image deployment/files files="$IMAGE" -n ${FILES_NAMESPACE}
+    kubectl rollout status deployment/files -n ${FILES_NAMESPACE} --timeout=120s
     echo "PR image deployed successfully"
   patch_deployment: |-
     echo "Patching files deployment for DevSpace..."
-    kubectl patch deployment files-files -n ${FILES_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
+    kubectl patch deployment files -n ${FILES_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
     spec:
       template:
         spec:
