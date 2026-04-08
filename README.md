@@ -32,7 +32,7 @@ devspace dev -w
 ### Run tests
 
 ```bash
-devspace run test:e2e
+devspace run test-e2e
 ```
 
 See [E2E Testing](https://github.com/agynio/architecture/blob/main/architecture/operations/e2e-testing.md).
