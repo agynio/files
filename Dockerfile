@@ -21,7 +21,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 
-COPY buf.gen.yaml buf.yaml ./
+COPY buf.gen.yaml buf.yaml buf.lock ./
 RUN buf generate buf.build/agynio/api --path agynio/api/files/v1
 
 COPY . .
