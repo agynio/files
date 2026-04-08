@@ -1,5 +1,5 @@
 ALTER TABLE files
-    ADD COLUMN tenant_id UUID NOT NULL;
+    ADD COLUMN tenant_id UUID;
 
 DROP INDEX IF EXISTS idx_files_created_at;
 
