@@ -27,6 +27,7 @@ functions:
     fi
   patch_deployment: |-
     echo "Patching files deployment for DevSpace..."
+    kubectl patch deployment files -n ${FILES_NAMESPACE} --type json -p '[{"op":"remove","path":"/spec/template/spec/containers/0/livenessProbe"},{"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe"}]'
     kubectl patch deployment files -n ${FILES_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
     spec:
       template:
@@ -54,16 +55,6 @@ functions:
                   done
                   buf generate buf.build/agynio/api --path agynio/api/files/v1
                   exec go run ./cmd/files
-              livenessProbe:
-                exec:
-                  command: ["true"]
-                initialDelaySeconds: 0
-                periodSeconds: 10
-              readinessProbe:
-                exec:
-                  command: ["true"]
-                initialDelaySeconds: 0
-                periodSeconds: 5
               volumeMounts:
                 - name: data
                   mountPath: /opt/app/data
