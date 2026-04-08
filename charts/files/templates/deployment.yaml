@@ -1,0 +1,2 @@
+{{- include "files.configureEnv" . -}}
+{{- include "service-base.deployment" . -}}
