@@ -111,8 +111,6 @@ deployments:
         securityContext:
           runAsUser: 1000
           fsGroup: 1000
-        labels:
-          app.kubernetes.io/name: files-e2e
 
 commands:
   test-e2e: |-
