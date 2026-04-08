@@ -115,4 +115,4 @@ jobs:
         env:
           KUBECONFIG: ${{ github.workspace }}/bootstrap/stacks/k8s/.kube/agyn-local-kubeconfig.yaml
           PR_IMAGE: ${{ env.PR_IMAGE }}
-        run: devspace run-pipeline test:e2e
+        run: devspace run-pipeline test-e2e

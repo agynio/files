@@ -104,8 +104,8 @@ deployments:
           app.kubernetes.io/name: files-e2e
 
 commands:
-  test:e2e: |-
-    devspace run-pipeline test:e2e $@
+  test-e2e: |-
+    devspace run-pipeline test-e2e $@
 
 pipelines:
   dev:
@@ -137,7 +137,7 @@ pipelines:
         stop_dev files
       fi
 
-  test:e2e:
+  test-e2e:
     run: |-
       disable_argocd_sync
       deploy_pr_image
