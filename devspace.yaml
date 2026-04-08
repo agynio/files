@@ -25,16 +25,6 @@ functions:
     else
       echo "WARNING: ArgoCD Application 'files' not found in argocd namespace."
     fi
-  deploy_pr_image: |-
-    echo "Deploying PR image to cluster..."
-    IMAGE="${PR_IMAGE:-}"
-    if [ -z "$IMAGE" ]; then
-      echo "ERROR: PR_IMAGE not set, aborting hot deploy"
-      exit 1
-    fi
-    kubectl set image deployment/files files="$IMAGE" -n ${FILES_NAMESPACE}
-    kubectl rollout status deployment/files -n ${FILES_NAMESPACE} --timeout=120s
-    echo "PR image deployed successfully"
   patch_deployment: |-
     echo "Patching files deployment for DevSpace..."
     kubectl patch deployment files -n ${FILES_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
@@ -95,19 +85,32 @@ deployments:
         name: component-chart
         repo: https://charts.devspace.sh
       values:
-        securityContext:
-          fsGroup: 1000
-        initContainers:
-          - name: prepare-workspace
-            image: busybox:1.36
-            command: ["sh", "-c", "mkdir -p /opt/app/data && chown 1000:1000 /opt/app/data"]
-            securityContext:
-              runAsUser: 0
         containers:
           - image: ${E2E_IMAGE}
+            command: ["sleep", "infinity"]
             env:
               - name: FILES_ADDRESS
                 value: "files:50051"
+            resources:
+              requests:
+                cpu: 500m
+                memory: 512Mi
+              limits:
+                cpu: "1"
+                memory: 2Gi
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              readOnlyRootFilesystem: false
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+              seccompProfile:
+                type: RuntimeDefault
+        securityContext:
+          runAsUser: 1000
+          fsGroup: 1000
         labels:
           app.kubernetes.io/name: files-e2e
 
@@ -147,21 +150,21 @@ pipelines:
 
   test-e2e:
     run: |-
-      disable_argocd_sync
-      deploy_pr_image
       create_deployments e2e-runner
-      start_dev e2e-runner
-      set +e
-      exec_container \
-        --label-selector "app.kubernetes.io/name=files-e2e" \
-        -n ${FILES_NAMESPACE} \
-        -- bash -c 'cd /opt/app/data && buf generate buf.build/agynio/api --path agynio/api/files/v1 && go test -v -count=1 -tags e2e ./test/e2e/'
-      EXIT_CODE=$?
-      set -e
+      trap 'stop_dev e2e-runner; purge_deployments e2e-runner' EXIT
+      start_dev e2e-runner --disable-pod-replace
+      echo "Waiting for source files to sync..."
+      sleep 5
+      echo "Generating protobuf types..."
+      exec_container --label-selector=app.kubernetes.io/name=devspace-app,app.kubernetes.io/component=e2e-runner -n ${FILES_NAMESPACE} -- \
+        bash -c 'cd /opt/app/data && buf generate buf.build/agynio/api --path agynio/api/files/v1'
+      echo "Running e2e tests..."
+      exec_container --label-selector=app.kubernetes.io/name=devspace-app,app.kubernetes.io/component=e2e-runner -n ${FILES_NAMESPACE} -- \
+        bash -c 'cd /opt/app/data && go test -v -count=1 -tags e2e ./test/e2e/'
+      echo "Cleaning up test runner pod..."
       stop_dev e2e-runner
       purge_deployments e2e-runner
-      restore_argocd_sync
-      exit ${EXIT_CODE}
+      trap - EXIT
 
 hooks:
   - name: restore-argocd-auto-sync
@@ -207,15 +210,18 @@ dev:
   e2e-runner:
     namespace: ${FILES_NAMESPACE}
     labelSelector:
-      app.kubernetes.io/name: files-e2e
-    command: ["sleep", "infinity"]
-    workingDir: /opt/app/data
+      app.kubernetes.io/name: devspace-app
+      app.kubernetes.io/component: e2e-runner
     sync:
       - path: ./:/opt/app/data
         noWatch: true
-        disableDownload: true
         excludePaths:
           - .git/
-          - .devspace/
           - /.gen/
-          - /tmp/
+          - .devspace/
+        uploadExcludePaths:
+          - .git/
+          - /.gen/
+        downloadExcludePaths:
+          - .git/
+          - /.gen/
