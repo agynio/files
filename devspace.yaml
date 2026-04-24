@@ -49,17 +49,23 @@ functions:
                 - sh
                 - -c
                 - |
-                  set -eu
+                  set -eux
                   elapsed=0
-                  while [ ! -f /opt/app/data/go.mod ]; do
+                  while [ ! -f /opt/app/data/go.mod ] || [ ! -f /opt/app/data/go.sum ] || [ ! -f /opt/app/data/buf.gen.yaml ] || [ ! -f /opt/app/data/cmd/files/main.go ]; do
                     sleep 1; elapsed=$((elapsed + 1))
-                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
+                    [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
+                  echo "Files synced, generating protobuf types..."
                   buf generate buf.build/agynio/api --path agynio/api/files/v1
+                  echo "buf generate complete, starting files..."
+                  export GOTOOLCHAIN=local
                   exec go run ./cmd/files
               volumeMounts:
                 - name: data
                   mountPath: /opt/app/data
+              livenessProbe: null
+              readinessProbe: null
+              startupProbe: null
               resources:
                 requests:
                   cpu: 500m
