@@ -2,7 +2,6 @@ version: v2beta1
 
 vars:
   FILES_NAMESPACE: platform
-  E2E_IMAGE: ghcr.io/agynio/devcontainer-go:1
 
 functions:
   disable_argocd_sync: |-
@@ -16,6 +15,10 @@ functions:
       echo "WARNING: ArgoCD Application 'files' not found in argocd namespace."
     fi
   restore_argocd_sync: &restore_argocd_sync |-
+    if [ -n "${CI:-}" ]; then
+      echo "Skipping ArgoCD auto-sync restore in CI."
+      exit 0
+    fi
     if kubectl get application files -n argocd >/dev/null 2>&1; then
       echo "Re-enabling ArgoCD auto-sync for files..."
       kubectl patch application files -n argocd \
@@ -40,7 +43,7 @@ functions:
               emptyDir: {}
           containers:
             - name: files
-              image: ghcr.io/agynio/devcontainer-go:1 # keep in sync with E2E_IMAGE
+              image: ghcr.io/agynio/devcontainer-go:1
               workingDir: /opt/app/data
               command:
                 - sh
@@ -77,45 +80,6 @@ functions:
     EOF
     )"
 
-deployments:
-  e2e-runner:
-    namespace: ${FILES_NAMESPACE}
-    helm:
-      chart:
-        name: component-chart
-        repo: https://charts.devspace.sh
-      values:
-        containers:
-          - image: ${E2E_IMAGE}
-            command: ["sleep", "infinity"]
-            env:
-              - name: FILES_ADDRESS
-                value: "files:50051"
-            resources:
-              requests:
-                cpu: 500m
-                memory: 512Mi
-              limits:
-                cpu: "1"
-                memory: 2Gi
-            securityContext:
-              runAsNonRoot: true
-              runAsUser: 1000
-              runAsGroup: 1000
-              readOnlyRootFilesystem: false
-              allowPrivilegeEscalation: false
-              capabilities:
-                drop: ["ALL"]
-              seccompProfile:
-                type: RuntimeDefault
-        securityContext:
-          runAsUser: 1000
-          fsGroup: 1000
-
-commands:
-  test-e2e: |-
-    devspace run-pipeline test-e2e $@
-
 pipelines:
   dev:
     flags:
@@ -145,24 +109,6 @@ pipelines:
         echo "Dev environment ready. Stopping dev session."
         stop_dev files
       fi
-
-  test-e2e:
-    run: |-
-      create_deployments e2e-runner
-      trap 'stop_dev e2e-runner; purge_deployments e2e-runner' EXIT
-      start_dev e2e-runner --disable-pod-replace
-      echo "Waiting for source files to sync..."
-      sleep 5
-      echo "Generating protobuf types..."
-      exec_container --label-selector=app.kubernetes.io/name=devspace-app,app.kubernetes.io/component=e2e-runner -n ${FILES_NAMESPACE} -- \
-        bash -c 'cd /opt/app/data && buf generate buf.build/agynio/api --path agynio/api/files/v1'
-      echo "Running e2e tests..."
-      exec_container --label-selector=app.kubernetes.io/name=devspace-app,app.kubernetes.io/component=e2e-runner -n ${FILES_NAMESPACE} -- \
-        bash -c 'cd /opt/app/data && go test -v -count=1 -tags e2e ./test/e2e/'
-      echo "Cleaning up test runner pod..."
-      stop_dev e2e-runner
-      purge_deployments e2e-runner
-      trap - EXIT
 
 hooks:
   - name: restore-argocd-auto-sync
@@ -204,22 +150,3 @@ dev:
           lastLines: 200
     ports:
       - port: "50051"
-
-  e2e-runner:
-    namespace: ${FILES_NAMESPACE}
-    labelSelector:
-      app.kubernetes.io/name: devspace-app
-      app.kubernetes.io/component: e2e-runner
-    sync:
-      - path: ./:/opt/app/data
-        noWatch: true
-        excludePaths:
-          - .git/
-          - /.gen/
-          - .devspace/
-        uploadExcludePaths:
-          - .git/
-          - /.gen/
-        downloadExcludePaths:
-          - .git/
-          - /.gen/
