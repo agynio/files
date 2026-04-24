@@ -32,7 +32,8 @@ devspace dev -w
 ### Run tests
 
 ```bash
-devspace run test:e2e
+go test ./...
 ```
 
-See [E2E Testing](https://github.com/agynio/architecture/blob/main/architecture/operations/e2e-testing.md).
+E2E coverage runs from the centralized suite; see
+[E2E Testing](https://github.com/agynio/architecture/blob/main/architecture/operations/e2e-testing.md).
