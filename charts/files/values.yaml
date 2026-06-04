@@ -1,5 +1,5 @@
 nameOverride: ""
-fullnameOverride: ""
+fullnameOverride: "files"
 
 global:
   imageRegistry: ""
@@ -151,8 +151,8 @@ files:
   urlExpiry: "1h"
   databaseUrl:
     value: ""
-    existingSecret: ""
-    existingSecretKey: database-url
+    existingSecret: agyn-platform-database-urls
+    existingSecretKey: files
   s3:
     endpoint: ""
     bucket: ""
@@ -160,9 +160,9 @@ files:
     useSSL: false
     accessKey:
       value: ""
-      existingSecret: ""
-      existingSecretKey: s3-access-key
+      existingSecret: agyn-files-s3
+      existingSecretKey: access-key
     secretKey:
       value: ""
-      existingSecret: ""
-      existingSecretKey: s3-secret-key
+      existingSecret: agyn-files-s3
+      existingSecretKey: secret-key
