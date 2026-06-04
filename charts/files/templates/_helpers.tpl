@@ -17,10 +17,10 @@
 {{- end }}
 {{- $env = append $env $dbVar -}}
 
-{{- $endpoint := required "files.s3.endpoint is required" (trimAll " \n\t" (default "" .Values.files.s3.endpoint)) -}}
+{{- $endpoint := trimAll " \n\t" (default "" .Values.files.s3.endpoint) -}}
 {{- $env = append $env (dict "name" "S3_ENDPOINT" "value" $endpoint) -}}
 
-{{- $bucket := required "files.s3.bucket is required" (trimAll " \n\t" (default "" .Values.files.s3.bucket)) -}}
+{{- $bucket := trimAll " \n\t" (default "" .Values.files.s3.bucket) -}}
 {{- $env = append $env (dict "name" "S3_BUCKET" "value" $bucket) -}}
 
 {{- $region := trimAll " \n\t" (default "us-east-1" .Values.files.s3.region) -}}
