@@ -139,18 +139,33 @@ dev:
             excludePaths:
               - .git/
               - .devspace/
+              - .terraform/
               - /.gen/
+              - /bootstrap/
+              - /dist/
+              - /e2e/
               - /tmp/
+              - terraform.tfstate*
             uploadExcludePaths:
               - .git/
               - .devspace/
+              - .terraform/
               - /.gen/
+              - /bootstrap/
+              - /dist/
+              - /e2e/
               - /tmp/
+              - terraform.tfstate*
             downloadExcludePaths:
               - .git/
               - .devspace/
+              - .terraform/
               - /.gen/
+              - /bootstrap/
+              - /dist/
+              - /e2e/
               - /tmp/
+              - terraform.tfstate*
         logs:
           enabled: true
           lastLines: 200
