@@ -34,7 +34,7 @@ jobs:
 
       - name: Deploy files from source
         env:
-          FILES_USE_PREBUILT_BINARY: "true"
+          FILES_E2E_USE_PREBUILT_BINARY: "true"
         run: |
           buf generate buf.build/agynio/api --path agynio/api/files/v1
           mkdir -p bin
@@ -48,15 +48,9 @@ jobs:
           ref: main
           path: e2e
 
-      - name: Prepare E2E suite dependencies
+      - name: Patch E2E suite execution
         run: |
           set -euo pipefail
-          for suite in playwright-chat-app playwright-tracing-app playwright; do
-            (
-              cd "e2e/suites/${suite}"
-              npm ci --no-fund --no-audit
-            )
-          done
           node <<'NODE'
           const fs = require('fs');
 
@@ -81,12 +75,25 @@ jobs:
           for (const suite of ['playwright-chat-app', 'playwright-tracing-app', 'playwright']) {
             const suitePath = `e2e/suites/${suite}/suite.yaml`;
             let content = fs.readFileSync(suitePath, 'utf8');
-            const npmCi = '  npm ci --no-fund --no-audit\n';
-            const guardedNpmCi = '  if [ ! -d node_modules ]; then\n    npm ci --no-fund --no-audit\n  fi\n';
-            if (!content.includes(npmCi)) {
-              throw new Error(`expected npm ci command not found in ${suitePath}`);
+            const generate = '  npx buf generate\n';
+            const directGenerate = [
+              '  npm ci --no-fund --no-audit',
+              '  node <<\'NODE\'',
+              '  const fs = require("fs");',
+              '  const os = require("os");',
+              '  const path = require("path");',
+              '  const source = fs.realpathSync("node_modules/.bin/buf");',
+              '  const target = path.join(os.tmpdir(), `agynio-e2e-buf-${process.pid}`);',
+              '  fs.copyFileSync(source, target);',
+              '  fs.chmodSync(target, 0o755);',
+              '  fs.writeFileSync(".buf-bin", target);',
+              '  NODE',
+              '  "$(cat .buf-bin)" generate',
+            ].join('\n') + '\n';
+            if (!content.includes(generate)) {
+              throw new Error(`expected buf generate command not found in ${suitePath}`);
             }
-            content = content.replace(npmCi, guardedNpmCi);
+            content = content.replace(generate, directGenerate);
             fs.writeFileSync(suitePath, content);
           }
           NODE

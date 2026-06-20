@@ -2,7 +2,7 @@ version: v2beta1
 
 vars:
   FILES_NAMESPACE: platform
-  FILES_USE_PREBUILT_BINARY:
+  FILES_E2E_USE_PREBUILT_BINARY:
     source: env
     default: "false"
 
@@ -49,8 +49,8 @@ functions:
               image: ghcr.io/agynio/devcontainer-go:1
               workingDir: /opt/app/data
               env:
-                - name: FILES_USE_PREBUILT_BINARY
-                  value: "${FILES_USE_PREBUILT_BINARY}"
+                - name: FILES_E2E_USE_PREBUILT_BINARY
+                  value: "${FILES_E2E_USE_PREBUILT_BINARY}"
               command:
                 - sh
                 - -c
@@ -61,7 +61,7 @@ functions:
                     sleep 1; elapsed=$((elapsed + 1))
                     [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
-                  if [ "${FILES_USE_PREBUILT_BINARY:-false}" = "true" ] && [ -x /opt/app/data/bin/files ]; then
+                  if [ "${FILES_E2E_USE_PREBUILT_BINARY:-false}" = "true" ] && [ -x /opt/app/data/bin/files ]; then
                     echo "Files synced, starting prebuilt files binary..."
                     exec /opt/app/data/bin/files
                   fi
