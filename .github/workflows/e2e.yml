@@ -33,12 +33,8 @@ jobs:
           version: 1.66.0
 
       - name: Deploy files from source
-        env:
-          FILES_E2E_USE_PREBUILT_BINARY: "true"
         run: |
           buf generate buf.build/agynio/api --path agynio/api/files/v1
-          mkdir -p bin
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/files ./cmd/files
           devspace dev
 
       - name: Checkout E2E repository
