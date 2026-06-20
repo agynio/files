@@ -26,6 +26,12 @@ jobs:
       - name: Setup DevSpace
         uses: agynio/e2e/.github/actions/setup-devspace@main
 
+      - name: Setup Buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          version: 1.66.0
+
       - name: Deploy files from source
         run: |
           buf generate buf.build/agynio/api --path agynio/api/files/v1
