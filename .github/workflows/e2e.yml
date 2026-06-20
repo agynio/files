@@ -33,23 +33,65 @@ jobs:
           version: 1.66.0
 
       - name: Deploy files from source
+        env:
+          FILES_USE_PREBUILT_BINARY: "true"
         run: |
           buf generate buf.build/agynio/api --path agynio/api/files/v1
           mkdir -p bin
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/files ./cmd/files
           devspace dev
 
-      - name: Warm Playwright suite dependencies
+      - name: Checkout E2E repository
+        uses: actions/checkout@v4
+        with:
+          repository: agynio/e2e
+          ref: main
+          path: e2e
+
+      - name: Prepare E2E suite dependencies
         run: |
-          git clone --depth 1 https://github.com/agynio/e2e.git e2e-warmup
+          set -euo pipefail
           for suite in playwright-chat-app playwright-tracing-app playwright; do
             (
-              cd "e2e-warmup/suites/${suite}"
+              cd "e2e/suites/${suite}"
               npm ci --no-fund --no-audit
             )
           done
+          node <<'NODE'
+          const fs = require('fs');
+
+          const actionPath = 'e2e/.github/actions/run-tests/action.yml';
+          const checkoutStep = [
+            '    - name: Checkout e2e repository',
+            '      uses: actions/checkout@v4',
+            '      with:',
+            '        repository: agynio/e2e',
+            '        ref: main',
+            '        path: e2e',
+            '',
+            '',
+          ].join('\n');
+          let action = fs.readFileSync(actionPath, 'utf8');
+          if (!action.includes(checkoutStep)) {
+            throw new Error('expected checkout step not found in e2e run-tests action');
+          }
+          action = action.replace(checkoutStep, '');
+          fs.writeFileSync(actionPath, action);
+
+          for (const suite of ['playwright-chat-app', 'playwright-tracing-app', 'playwright']) {
+            const suitePath = `e2e/suites/${suite}/suite.yaml`;
+            let content = fs.readFileSync(suitePath, 'utf8');
+            const npmCi = '  npm ci --no-fund --no-audit\n';
+            const guardedNpmCi = '  if [ ! -d node_modules ]; then\n    npm ci --no-fund --no-audit\n  fi\n';
+            if (!content.includes(npmCi)) {
+              throw new Error(`expected npm ci command not found in ${suitePath}`);
+            }
+            content = content.replace(npmCi, guardedNpmCi);
+            fs.writeFileSync(suitePath, content);
+          }
+          NODE
 
       - name: Run E2E tests
-        uses: agynio/e2e/.github/actions/run-tests@main
+        uses: ./e2e/.github/actions/run-tests
         with:
           service: files
