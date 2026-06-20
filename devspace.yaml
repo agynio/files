@@ -166,6 +166,7 @@ dev:
               - /e2e/
               - /tmp/
               - terraform.tfstate*
+              - bin/
         logs:
           enabled: true
           lastLines: 200
