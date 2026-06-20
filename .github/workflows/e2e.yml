@@ -27,7 +27,21 @@ jobs:
         uses: agynio/e2e/.github/actions/setup-devspace@main
 
       - name: Deploy files from source
-        run: devspace dev
+        run: |
+          buf generate buf.build/agynio/api --path agynio/api/files/v1
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/files ./cmd/files
+          devspace dev
+
+      - name: Warm Playwright suite dependencies
+        run: |
+          git clone --depth 1 https://github.com/agynio/e2e.git e2e-warmup
+          for suite in playwright-chat-app playwright-tracing-app playwright; do
+            (
+              cd "e2e-warmup/suites/${suite}"
+              npm ci --no-fund --no-audit
+            )
+          done
 
       - name: Run E2E tests
         uses: agynio/e2e/.github/actions/run-tests@main

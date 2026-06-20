@@ -55,6 +55,10 @@ functions:
                     sleep 1; elapsed=$((elapsed + 1))
                     [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
+                  if [ -x /opt/app/data/bin/files ]; then
+                    echo "Files synced, starting prebuilt files binary..."
+                    exec /opt/app/data/bin/files
+                  fi
                   echo "Files synced, generating protobuf types..."
                   buf generate buf.build/agynio/api --path agynio/api/files/v1
                   echo "buf generate complete, starting files..."
@@ -166,6 +170,7 @@ dev:
               - /e2e/
               - /tmp/
               - terraform.tfstate*
+              - bin/
         logs:
           enabled: true
           lastLines: 200
