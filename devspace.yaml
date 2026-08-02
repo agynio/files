@@ -130,7 +130,6 @@ dev:
     namespace: ${FILES_NAMESPACE}
     labelSelector:
       app.kubernetes.io/name: files
-      app.kubernetes.io/instance: files
     containers:
       files:
         container: files
